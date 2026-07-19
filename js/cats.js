@@ -29,13 +29,17 @@ export function isNameTaken(name, cats, excludeId = null) {
 export function createCat(name, hexKey) {
   const needs = {};
   NEEDS.forEach((n) => { needs[n] = 65 + Math.random() * 25; });
+  // Inspirado en la referencia pixel-art: blanco, café atigrado, gris,
+  // negro, naranjo, gris tuxedo, siamés y crema — en tonos pastel suaves.
   const coats = [
-    { coat: '#f0c4a0', dark: '#d49a72', light: '#fff0dc', pattern: 'tabby', eyes: '#8ecf7a', blush: '#f5a8b0' },
-    { coat: '#f2ebe3', dark: '#c4b8b0', light: '#fffaf4', pattern: 'patches', eyes: '#7ec4d4', blush: '#f2b0b8' },
-    { coat: '#c8c0d0', dark: '#9a90a4', light: '#ebe4f0', pattern: 'solid', eyes: '#e8c86a', blush: '#e8a8b0' },
-    { coat: '#e8b898', dark: '#c88868', light: '#fce8d4', pattern: 'tuxedo', eyes: '#9ad070', blush: '#f0a8a8' },
-    { coat: '#e8d8c8', dark: '#b8a898', light: '#faf4ec', pattern: 'points', eyes: '#78b8d8', blush: '#f0b0b8' },
-    { coat: '#f0c8d0', dark: '#d898a8', light: '#fff0f4', pattern: 'solid', eyes: '#90c8e0', blush: '#f8a0b0' },
+    { coat: '#fdf9f2', dark: '#c9bcc0', light: '#ffffff', pattern: 'solid', eyes: '#8fd0e8', blush: '#f8b0bc' },
+    { coat: '#c9a986', dark: '#8f7258', light: '#ecdcc4', pattern: 'tabby', eyes: '#e8b060', blush: '#f0a8a8' },
+    { coat: '#dcdce2', dark: '#a2a2ac', light: '#f9f9fc', pattern: 'tuxedo', eyes: '#9ac878', blush: '#f2b0b8' },
+    { coat: '#5c5866', dark: '#3d3a46', light: '#908a9c', pattern: 'solid', eyes: '#f0b060', blush: '#c88898' },
+    { coat: '#f2b366', dark: '#c9884a', light: '#fce4c0', pattern: 'tabby', eyes: '#a87848', blush: '#f5a8a0' },
+    { coat: '#9a94a2', dark: '#6e6878', light: '#fbf8f2', pattern: 'tuxedo', eyes: '#e8c86a', blush: '#f0a8b0' },
+    { coat: '#f0e6d6', dark: '#9a8474', light: '#fcf6ea', pattern: 'points', eyes: '#86c8e8', blush: '#f2b0b8' },
+    { coat: '#fbf2e0', dark: '#d8c4a8', light: '#fffdf6', pattern: 'patches', eyes: '#7ec4d4', blush: '#f8b0bc' },
   ];
   const appearance = { ...coats[Math.floor(Math.random() * coats.length)] };
   return {
