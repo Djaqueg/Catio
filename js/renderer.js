@@ -73,10 +73,10 @@ export class Renderer {
   /* ── Escena base ── */
 
   _setupLights() {
-    const hemi = new THREE.HemisphereLight(0xfff4e2, 0xb8d8c0, 1.15);
+    const hemi = new THREE.HemisphereLight(0xfff8ee, 0xc8e8d4, 1.28);
     this.scene.add(hemi);
 
-    const sun = new THREE.DirectionalLight(0xfff2dc, 1.6);
+    const sun = new THREE.DirectionalLight(0xfff6e8, 1.45);
     sun.position.set(9, 16, 7);
     sun.castShadow = true;
     sun.shadow.mapSize.set(2048, 2048);
@@ -94,7 +94,7 @@ export class Renderer {
     // Nubes low-poly que derivan lentamente
     this.clouds = new THREE.Group();
     const cloudMat = new THREE.MeshStandardMaterial({
-      color: 0xfffaf2, flatShading: true, roughness: 1,
+      color: 0xfffaf2, flatShading: false, roughness: 0.95,
       transparent: true, opacity: 0.85,
     });
     for (let i = 0; i < 6; i++) {
@@ -124,10 +124,13 @@ export class Renderer {
   }
 
   _mat(color, opts = {}) {
-    const key = `${color}|${opts.roughness ?? 0.85}|${opts.emissive ?? 0}`;
+    const flat = opts.flat ?? false;
+    const roughness = opts.roughness ?? (flat ? 0.88 : 0.74);
+    const key = `${color}|${roughness}|${opts.emissive ?? 0}|${flat ? 1 : 0}`;
     if (!this._matCache.has(key)) {
       this._matCache.set(key, new THREE.MeshStandardMaterial({
-        color, flatShading: true, roughness: opts.roughness ?? 0.85,
+        color, flatShading: flat, roughness,
+        metalness: flat ? 0 : 0.04,
         emissive: opts.emissive ?? 0x000000,
         emissiveIntensity: opts.emissiveIntensity ?? 0.35,
       }));
@@ -509,12 +512,14 @@ export class Renderer {
   /* ── Gato low-poly ── */
 
   _catMaterials(appearance) {
+    const soft = (hex) => this._mat(hex, { roughness: 0.7 });
     return {
-      coat: this._mat(new THREE.Color(appearance.coat).getHex()),
-      light: this._mat(new THREE.Color(appearance.light).getHex()),
-      dark: this._mat(new THREE.Color(appearance.dark).getHex()),
-      pink: this._mat(0xe89098),
-      eye: this._mat(0x3a3040, { roughness: 0.4 }),
+      coat: soft(new THREE.Color(appearance.coat).getHex()),
+      light: soft(new THREE.Color(appearance.light).getHex()),
+      dark: soft(new THREE.Color(appearance.dark).getHex()),
+      pink: this._mat(0xe89098, { roughness: 0.62 }),
+      eye: this._mat(0x3a3040, { roughness: 0.32 }),
+      eyeColor: this._mat(new THREE.Color(appearance.eyes || '#8ecf7a').getHex(), { roughness: 0.28 }),
     };
   }
 
@@ -527,13 +532,13 @@ export class Renderer {
     const body = new THREE.Group();
     root.add(body);
 
-    const torso = new THREE.Mesh(new THREE.IcosahedronGeometry(0.34, 0), mats.coat);
+    const torso = new THREE.Mesh(new THREE.IcosahedronGeometry(0.34, 1), mats.coat);
     torso.scale.set(1.5, 0.95, 1.0);
     torso.position.y = 0.46;
     torso.castShadow = true;
     body.add(torso);
 
-    const rump = new THREE.Mesh(new THREE.IcosahedronGeometry(0.28, 0), mats.coat);
+    const rump = new THREE.Mesh(new THREE.IcosahedronGeometry(0.28, 1), mats.coat);
     rump.position.set(-0.32, 0.48, 0);
     rump.castShadow = true;
     body.add(rump);
@@ -543,25 +548,27 @@ export class Renderer {
     headG.position.set(0.46, 0.74, 0);
     body.add(headG);
 
-    const head = new THREE.Mesh(new THREE.IcosahedronGeometry(0.22, 0), mats.coat);
+    const head = new THREE.Mesh(new THREE.IcosahedronGeometry(0.22, 1), mats.coat);
     head.scale.set(1.0, 0.95, 0.92);
     head.castShadow = true;
     headG.add(head);
 
-    const muzzle = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.1, 0.16), mats.light);
+    const muzzle = new THREE.Mesh(new THREE.SphereGeometry(0.09, 8, 6), mats.light);
+    muzzle.scale.set(1.55, 0.85, 1.1);
     muzzle.position.set(0.17, -0.06, 0);
     headG.add(muzzle);
 
-    const nose = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.04, 0.05), mats.pink);
+    const nose = new THREE.Mesh(new THREE.SphereGeometry(0.028, 6, 5), mats.pink);
     nose.position.set(0.245, -0.03, 0);
     headG.add(nose);
 
-    const mouth = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.09, 0.08), mats.eye);
+    const mouth = new THREE.Mesh(new THREE.SphereGeometry(0.04, 6, 4), mats.eye);
+    mouth.scale.set(1.5, 1.2, 1.2);
     mouth.position.set(0.19, -0.15, 0);
     mouth.visible = false;
     headG.add(mouth);
 
-    const earGeo = new THREE.ConeGeometry(0.095, 0.22, 4);
+    const earGeo = new THREE.ConeGeometry(0.095, 0.22, 6);
     const ears = [0.12, -0.12].map((z) => {
       const ear = new THREE.Mesh(earGeo, mats.coat);
       ear.position.set(-0.02, 0.22, z);
@@ -571,22 +578,21 @@ export class Renderer {
       return ear;
     });
 
-    const eyeGeo = new THREE.IcosahedronGeometry(0.035, 0);
-    const eyeMat = this._mat(new THREE.Color(appearance.eyes || '#8ecf7a').getHex(), { roughness: 0.35 });
+    const eyeGeo = new THREE.SphereGeometry(0.038, 8, 6);
     const eyes = [0.1, -0.1].map((z) => {
       const eyeG = new THREE.Group();
       eyeG.position.set(0.17, 0.05, z);
-      const ball = new THREE.Mesh(eyeGeo, eyeMat);
-      const pupil = new THREE.Mesh(new THREE.IcosahedronGeometry(0.018, 0), mats.eye);
+      const ball = new THREE.Mesh(eyeGeo, mats.eyeColor);
+      const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.016, 6, 4), mats.eye);
       pupil.position.x = 0.024;
       eyeG.add(ball, pupil);
       headG.add(eyeG);
       return eyeG;
     });
 
-    // Patas: pivote en la cadera, punta blanca como la referencia
-    const legGeo = new THREE.BoxGeometry(0.1, 0.3, 0.1);
-    const pawGeo = new THREE.BoxGeometry(0.12, 0.1, 0.11);
+    // Patas redondeadas
+    const legGeo = new THREE.CapsuleGeometry(0.05, 0.22, 4, 8);
+    const pawGeo = new THREE.SphereGeometry(0.065, 6, 5);
     const legs = [
       [0.32, 0.16], [0.32, -0.16], [-0.34, 0.16], [-0.34, -0.16],
     ].map(([x, z]) => {
@@ -602,22 +608,22 @@ export class Renderer {
       return legG;
     });
 
-    // Cola: cadena articulada con punta blanca
+    // Cola articulada suave
     const tail1 = new THREE.Group();
     tail1.position.set(-0.55, 0.6, 0);
     body.add(tail1);
-    const t1 = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.065, 0.34, 5), mats.coat);
+    const t1 = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.065, 0.34, 8), mats.coat);
     t1.position.y = 0.16;
     t1.castShadow = true;
     tail1.add(t1);
     const tail2 = new THREE.Group();
     tail2.position.y = 0.33;
     tail1.add(tail2);
-    const t2 = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.05, 0.3, 5), mats.coat);
+    const t2 = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.05, 0.3, 8), mats.coat);
     t2.position.y = 0.14;
     t2.castShadow = true;
     tail2.add(t2);
-    const tip = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.04, 0.16, 5), mats.light);
+    const tip = new THREE.Mesh(new THREE.SphereGeometry(0.045, 6, 5), mats.light);
     tip.position.y = 0.36;
     tail2.add(tip);
 
@@ -637,6 +643,8 @@ export class Renderer {
       body, headG, ears, eyes, mouth, legs, tail1, tail2,
       nameSprite, bubble, bubbleIcon: null, name: cat.name,
       anim: { x: 0, z: 0, angle: 0, moving: false, init: false },
+      poseCurrent: null,
+      poseActivity: null,
     };
     return root;
   }
@@ -684,14 +692,18 @@ export class Renderer {
     const distance = Math.hypot(ddx, ddz);
     anim.moving = distance > 0.04;
     if (anim.moving) {
-      const step = Math.min(distance, 1.9 * delta);
-      anim.x += (ddx / distance) * step;
-      anim.z += (ddz / distance) * step;
+      const moveEase = 1 - Math.exp(-delta * 4.8);
+      anim.x += ddx * moveEase;
+      anim.z += ddz * moveEase;
+      if (distance < 0.025) {
+        anim.x = dx3;
+        anim.z = dz3;
+      }
       const targetAngle = Math.atan2(-ddz, ddx);
       let diff = targetAngle - anim.angle;
       while (diff > Math.PI) diff -= Math.PI * 2;
       while (diff < -Math.PI) diff += Math.PI * 2;
-      anim.angle += diff * Math.min(1, delta * 8);
+      anim.angle += diff * (1 - Math.exp(-delta * 7));
     } else {
       anim.x = dx3;
       anim.z = dz3;
@@ -701,8 +713,8 @@ export class Renderer {
 
     const seed = cat.id.charCodeAt(cat.id.length - 1);
     const activity = anim.moving ? 'walk' : (cat.activity || 'explore');
-    const phase = t * (anim.moving ? 8 : 2.2) + seed;
-    this._poseCat(ud, activity, phase, t, seed);
+    const phase = t * (anim.moving ? 7 : 2) + seed;
+    this._poseCat(ud, activity, phase, t, seed, delta);
 
     // Nombre actualizado (renombres) y burbuja de actividad
     if (ud.name !== cat.name) {
@@ -730,153 +742,212 @@ export class Renderer {
     ud.nameSprite.rotation.y = -obj.rotation.y;
   }
 
-  _poseCat(ud, activity, phase, t, seed) {
-    const { body, headG, ears, eyes, mouth, legs, tail1, tail2 } = ud;
+  _defaultPose() {
+    return {
+      body: { pos: [0, 0, 0], rot: [0, 0, 0], scale: [1, 1, 1] },
+      head: { pos: [0.46, 0.74, 0], rot: [0, 0, 0] },
+      legs: Array.from({ length: 4 }, () => ({ rot: [0, 0, 0], scale: [1, 1, 1] })),
+      tail1: { rot: [0, 0, 0.55] },
+      tail2: { rot: [0, 0, -0.5] },
+      ears: [{ rot: [0.18, 0, 0] }, { rot: [-0.18, 0, 0] }],
+      eyes: [{ scale: [1, 1, 1] }, { scale: [1, 1, 1] }],
+      mouth: { visible: false, scaleY: 1 },
+    };
+  }
 
-    // Base
-    body.position.set(0, 0, 0);
-    body.rotation.set(0, 0, 0);
-    body.scale.set(1, 1, 1);
-    headG.position.set(0.46, 0.74, 0);
-    headG.rotation.set(0, 0, 0);
-    legs.forEach((leg) => {
-      leg.rotation.set(0, 0, 0);
-      leg.scale.set(1, 1, 1);
-    });
-    tail1.rotation.set(0, 0, 0.55);
-    tail2.rotation.set(0, 0, -0.5);
-    eyes.forEach((eye) => eye.scale.set(1, 1, 1));
-    ears.forEach((ear, i) => { ear.rotation.z = 0; ear.rotation.x = i === 0 ? 0.18 : -0.18; });
-    mouth.visible = false;
-
+  _computePoseTarget(activity, phase, t, seed) {
+    const p = this._defaultPose();
     const swing = Math.sin(phase);
+    const setRot = (node, x, y, z) => { node.rot = [x, y, z]; };
+    const setPos = (node, x, y, z) => { node.pos = [x, y, z]; };
+    const setScale = (node, x, y, z) => { node.scale = [x, y, z]; };
+
     switch (activity) {
       case 'walk': {
-        body.position.y = Math.abs(swing) * 0.05;
-        legs[0].rotation.z = swing * 0.55;
-        legs[3].rotation.z = swing * 0.55;
-        legs[1].rotation.z = -swing * 0.55;
-        legs[2].rotation.z = -swing * 0.55;
-        tail1.rotation.z = 0.75;
-        tail1.rotation.x = Math.sin(phase * 0.7) * 0.25;
-        headG.rotation.z = Math.abs(swing) * 0.04;
+        setPos(p.body, 0, Math.abs(swing) * 0.04, 0);
+        p.legs[0].rot = [0, 0, swing * 0.48];
+        p.legs[3].rot = [0, 0, swing * 0.48];
+        p.legs[1].rot = [0, 0, -swing * 0.48];
+        p.legs[2].rot = [0, 0, -swing * 0.48];
+        setRot(p.tail1, Math.sin(phase * 0.7) * 0.2, 0, 0.72);
+        setRot(p.head, 0, 0, Math.abs(swing) * 0.035);
         break;
       }
       case 'sleep': {
         const breathe = Math.sin(phase) * 0.02;
-        body.position.y = -0.26;
-        body.scale.set(1.05 + breathe, 0.72 - breathe, 1.12);
-        legs.forEach((leg) => { leg.scale.y = 0.25; });
-        headG.position.set(0.4, 0.5, 0.05);
-        headG.rotation.z = -0.35;
-        eyes.forEach((eye) => eye.scale.set(1, 0.12, 1));
-        tail1.rotation.set(0.9, 0, 1.4);
-        tail2.rotation.set(0.7, 0, -0.4);
+        setPos(p.body, 0, -0.26, 0);
+        setScale(p.body, 1.05 + breathe, 0.72 - breathe, 1.12);
+        p.legs.forEach((leg) => { leg.scale = [1, 0.25, 1]; });
+        setPos(p.head, 0.4, 0.5, 0.05);
+        setRot(p.head, 0, 0, -0.35);
+        p.eyes.forEach((eye) => { eye.scale = [1, 0.12, 1]; });
+        setRot(p.tail1, 0.9, 0, 1.4);
+        setRot(p.tail2, 0.7, 0, -0.4);
         break;
       }
       case 'loaf': {
-        body.position.y = -0.24;
-        body.scale.set(1.02, 0.78, 1.1);
-        legs.forEach((leg) => { leg.scale.y = 0.22; });
-        headG.position.set(0.44, 0.66, 0);
-        tail1.rotation.set(1.1, 0, 1.3);
-        tail2.rotation.set(0.6, 0, -0.3);
+        setPos(p.body, 0, -0.24, 0);
+        setScale(p.body, 1.02, 0.78, 1.1);
+        p.legs.forEach((leg) => { leg.scale = [1, 0.22, 1]; });
+        setPos(p.head, 0.44, 0.66, 0);
+        setRot(p.tail1, 1.1, 0, 1.3);
+        setRot(p.tail2, 0.6, 0, -0.3);
         break;
       }
       case 'roll': {
-        body.rotation.x = Math.sin(phase * 1.2) * 1.1;
-        body.position.y = 0.08;
-        legs.forEach((leg, i) => { leg.rotation.z = Math.sin(phase * 2 + i) * 0.4; });
-        tail1.rotation.z = 0.9;
+        setRot(p.body, Math.sin(phase * 1.2) * 1.1, 0, 0);
+        setPos(p.body, 0, 0.08, 0);
+        p.legs.forEach((leg, i) => { leg.rot = [0, 0, Math.sin(phase * 2 + i) * 0.4]; });
+        setRot(p.tail1, 0, 0, 0.9);
         break;
       }
       case 'stretch': {
-        body.scale.x = 1.14 + Math.sin(phase * 0.5) * 0.03;
-        body.rotation.z = -0.16;
-        body.position.y = 0.05;
-        legs[0].rotation.z = 0.8;
-        legs[1].rotation.z = 0.8;
-        headG.rotation.z = 0.3;
-        tail1.rotation.z = 1.0;
+        setScale(p.body, 1.12 + Math.sin(phase * 0.5) * 0.03, 1, 1);
+        setRot(p.body, 0, 0, -0.14);
+        setPos(p.body, 0, 0.05, 0);
+        p.legs[0].rot = [0, 0, 0.75];
+        p.legs[1].rot = [0, 0, 0.75];
+        setRot(p.head, 0, 0, 0.28);
+        setRot(p.tail1, 0, 0, 0.95);
         break;
       }
       case 'yawn': {
-        headG.rotation.z = 0.32;
-        mouth.visible = true;
-        mouth.scale.y = 0.6 + Math.abs(Math.sin(phase)) * 0.8;
-        eyes.forEach((eye) => eye.scale.set(1, 0.15, 1));
-        tail1.rotation.z = 0.62;
+        setRot(p.head, 0, 0, 0.3);
+        p.mouth.visible = true;
+        p.mouth.scaleY = 0.6 + Math.abs(Math.sin(phase)) * 0.75;
+        p.eyes.forEach((eye) => { eye.scale = [1, 0.15, 1]; });
+        setRot(p.tail1, 0, 0, 0.62);
         break;
       }
       case 'lick':
       case 'groom': {
-        headG.rotation.y = 0.55;
-        headG.rotation.z = -0.18;
-        legs[0].rotation.z = 1.15 + Math.sin(phase * 2.4) * 0.18;
-        if (Math.sin(phase) > 0) eyes.forEach((eye) => eye.scale.set(1, 0.15, 1));
+        setRot(p.head, 0, 0.5, -0.16);
+        p.legs[0].rot = [0, 0, 1.1 + Math.sin(phase * 2.4) * 0.16];
+        if (Math.sin(phase) > 0) p.eyes.forEach((eye) => { eye.scale = [1, 0.15, 1]; });
         break;
       }
       case 'play':
       case 'pounce': {
-        const hop = Math.abs(Math.sin(phase * 0.9));
-        body.position.y = hop * 0.22;
-        body.rotation.z = -hop * 0.12;
-        legs[0].rotation.z = hop * 0.9;
-        legs[1].rotation.z = hop * 0.9;
-        tail1.rotation.z = 0.9;
-        tail1.rotation.x = Math.sin(phase * 2) * 0.35;
+        const hop = Math.abs(Math.sin(phase * 0.85));
+        setPos(p.body, 0, hop * 0.2, 0);
+        setRot(p.body, 0, 0, -hop * 0.1);
+        p.legs[0].rot = [0, 0, hop * 0.85];
+        p.legs[1].rot = [0, 0, hop * 0.85];
+        setRot(p.tail1, Math.sin(phase * 2) * 0.3, 0, 0.88);
         break;
       }
       case 'eat':
       case 'drink': {
-        headG.rotation.z = -0.55 + Math.sin(phase * 0.45) * 0.06;
-        headG.position.y = 0.6;
-        eyes.forEach((eye) => eye.scale.set(1, 0.4, 1));
+        setRot(p.head, 0, 0, -0.5 + Math.sin(phase * 0.45) * 0.05);
+        setPos(p.head, 0.46, 0.6, 0);
+        p.eyes.forEach((eye) => { eye.scale = [1, 0.4, 1]; });
         break;
       }
       case 'litter': {
-        body.position.y = -0.06;
-        legs[2].rotation.z = Math.sin(phase * 1.7) * 0.3;
-        legs[3].rotation.z = -Math.sin(phase * 1.7) * 0.3;
+        setPos(p.body, 0, -0.06, 0);
+        p.legs[2].rot = [0, 0, Math.sin(phase * 1.7) * 0.28];
+        p.legs[3].rot = [0, 0, -Math.sin(phase * 1.7) * 0.28];
         break;
       }
       case 'warm':
       case 'watch': {
-        // Sentado: pecho arriba, patas traseras plegadas
-        body.rotation.z = 0.35;
-        body.position.y = -0.08;
-        legs[0].rotation.z = -0.35;
-        legs[1].rotation.z = -0.35;
-        legs[2].scale.y = 0.4;
-        legs[3].scale.y = 0.4;
-        headG.rotation.z = -0.3;
-        headG.rotation.y = Math.sin(t * 0.6 + seed) * 0.3;
-        tail1.rotation.set(0.8, 0, 1.2);
+        setRot(p.body, 0, 0, 0.32);
+        setPos(p.body, 0, -0.08, 0);
+        p.legs[0].rot = [0, 0, -0.32];
+        p.legs[1].rot = [0, 0, -0.32];
+        p.legs[2].scale = [1, 0.4, 1];
+        p.legs[3].scale = [1, 0.4, 1];
+        setRot(p.head, 0, Math.sin(t * 0.55 + seed) * 0.28, -0.28);
+        setRot(p.tail1, 0.8, 0, 1.2);
         break;
       }
       case 'ear_twitch': {
-        ears[0].rotation.z = Math.sin(phase * 5) > 0 ? 0.35 : 0;
-        ears[1].rotation.z = Math.sin(phase * 5 + 1) > 0 ? -0.3 : 0;
-        headG.rotation.y = Math.sin(phase * 0.8) * 0.2;
+        p.ears[0].rot = [0.18, 0, Math.sin(phase * 5) > 0 ? 0.32 : 0];
+        p.ears[1].rot = [-0.18, 0, Math.sin(phase * 5 + 1) > 0 ? -0.28 : 0];
+        setRot(p.head, 0, Math.sin(phase * 0.8) * 0.18, 0);
         break;
       }
       case 'tail_flick': {
-        tail1.rotation.x = Math.sin(phase * 4) * 0.5;
-        tail2.rotation.x = Math.sin(phase * 4 + 0.6) * 0.45;
+        setRot(p.tail1, Math.sin(phase * 3.6) * 0.45, 0, 0.55);
+        setRot(p.tail2, Math.sin(phase * 3.6 + 0.6) * 0.4, 0, -0.5);
         break;
       }
       default: {
-        // explore de pie: cola y cabeza con vida
-        headG.rotation.y = Math.sin(t * 0.7 + seed) * 0.35;
-        tail1.rotation.x = Math.sin(phase * 0.6) * 0.18;
-        tail2.rotation.x = Math.sin(phase * 0.6 + 0.5) * 0.15;
+        setRot(p.head, 0, Math.sin(t * 0.65 + seed) * 0.3, 0);
+        setRot(p.tail1, Math.sin(phase * 0.55) * 0.16, 0, 0.55);
+        setRot(p.tail2, Math.sin(phase * 0.55 + 0.5) * 0.13, 0, -0.5);
       }
     }
 
-    // Parpadeo
     if (activity !== 'sleep' && activity !== 'yawn' && ((t * 0.9 + seed) % 4.2) < 0.12) {
-      eyes.forEach((eye) => eye.scale.set(1, 0.1, 1));
+      p.eyes.forEach((eye) => { eye.scale = [1, 0.1, 1]; });
     }
+    return p;
+  }
+
+  _lerp(a, b, t) {
+    return a + (b - a) * t;
+  }
+
+  _lerpPose(from, to, k) {
+    const out = this._defaultPose();
+    out.body.pos = from.body.pos.map((v, i) => this._lerp(v, to.body.pos[i], k));
+    out.body.rot = from.body.rot.map((v, i) => this._lerp(v, to.body.rot[i], k));
+    out.body.scale = from.body.scale.map((v, i) => this._lerp(v, to.body.scale[i], k));
+    out.head.pos = from.head.pos.map((v, i) => this._lerp(v, to.head.pos[i], k));
+    out.head.rot = from.head.rot.map((v, i) => this._lerp(v, to.head.rot[i], k));
+    for (let i = 0; i < 4; i++) {
+      out.legs[i].rot = from.legs[i].rot.map((v, j) => this._lerp(v, to.legs[i].rot[j], k));
+      out.legs[i].scale = from.legs[i].scale.map((v, j) => this._lerp(v, to.legs[i].scale[j], k));
+    }
+    out.tail1.rot = from.tail1.rot.map((v, i) => this._lerp(v, to.tail1.rot[i], k));
+    out.tail2.rot = from.tail2.rot.map((v, i) => this._lerp(v, to.tail2.rot[i], k));
+    out.ears.forEach((ear, i) => {
+      ear.rot = from.ears[i].rot.map((v, j) => this._lerp(v, to.ears[i].rot[j], k));
+    });
+    out.eyes.forEach((eye, i) => {
+      eye.scale = from.eyes[i].scale.map((v, j) => this._lerp(v, to.eyes[i].scale[j], k));
+    });
+    out.mouth.visible = k > 0.45 ? to.mouth.visible : from.mouth.visible;
+    out.mouth.scaleY = this._lerp(from.mouth.scaleY, to.mouth.scaleY, k);
+    return out;
+  }
+
+  _applyPose(ud, p) {
+    const { body, headG, ears, eyes, mouth, legs, tail1, tail2 } = ud;
+    body.position.set(...p.body.pos);
+    body.rotation.set(...p.body.rot);
+    body.scale.set(...p.body.scale);
+    headG.position.set(...p.head.pos);
+    headG.rotation.set(...p.head.rot);
+    legs.forEach((leg, i) => {
+      leg.rotation.set(...p.legs[i].rot);
+      leg.scale.set(...p.legs[i].scale);
+    });
+    tail1.rotation.set(...p.tail1.rot);
+    tail2.rotation.set(...p.tail2.rot);
+    ears.forEach((ear, i) => {
+      ear.rotation.set(...p.ears[i].rot);
+    });
+    eyes.forEach((eye, i) => {
+      eye.scale.set(...p.eyes[i].scale);
+    });
+    mouth.visible = p.mouth.visible;
+    mouth.scale.y = p.mouth.scaleY;
+  }
+
+  _poseCat(ud, activity, phase, t, seed, delta) {
+    const target = this._computePoseTarget(activity, phase, t, seed);
+    if (!ud.poseCurrent) {
+      ud.poseCurrent = target;
+      ud.poseActivity = activity;
+    }
+    if (ud.poseActivity !== activity) {
+      ud.poseActivity = activity;
+    }
+    const blend = 1 - Math.exp(-delta / 0.32);
+    ud.poseCurrent = this._lerpPose(ud.poseCurrent, target, blend);
+    this._applyPose(ud, ud.poseCurrent);
   }
 
   /* ── Sprites de texto (nombres, burbujas, insignias) ── */
