@@ -1,59 +1,171 @@
+import * as THREE from './vendor/three.module.min.js';
 import { BUILDINGS } from './config.js';
 import {
-  axialToPixel, getHexCorners, parseKey, HEX_SIZE, pixelToAxial,
-  axialKey, hexNeighbors,
+  axialToPixel, getHexCorners, HEX_SIZE, hexNeighbors, axialKey,
 } from './hex.js';
 
-const COLORS = {
-  grass: ['#9fd48a', '#a8db96', '#94cc82'],
-  grassDark: ['#6fa878', '#7ab684', '#85c08e'],
-  edge: '#7aab7e',
-  shadow: 'rgba(90, 70, 100, 0.18)',
+// Escala: 1 unidad de mundo = HEX_SIZE px del grid axial.
+const W = (px) => px / HEX_SIZE;
+
+const PALETTE = {
+  grass: [0x9fd48a, 0xa8db96, 0x94cc82],
+  grassSide: 0x7ab684,
+  ghost: 0xffd28c,
+  fence: 0xc89878,
+  fenceLight: 0xe0b890,
+};
+
+const ACTIVITY_ICONS = {
+  eat: '🍽', drink: '💧', sleep: 'z', play: '✦', litter: '◌',
+  warm: '☀', groom: '♥', watch: '…', explore: '',
+  stretch: '∿', yawn: '◡', lick: '👅', loaf: '▮',
+  ear_twitch: '♪', tail_flick: '~', pounce: '✧', roll: '↻',
 };
 
 export class Renderer {
   constructor(canvas) {
     this.canvas = canvas;
-    this.ctx = canvas.getContext('2d');
-    this.offsetX = 0;
-    this.offsetY = 0;
-    this.scale = 1;
-    this.dragging = false;
-    this.lastTouch = null;
     this.highlightKey = null;
     this.expandableKeys = new Set();
     this.selectedBuild = null;
-    this.catAnimations = new Map();
+    this.onHexClick = null;
 
+    this.renderer = new THREE.WebGLRenderer({
+      canvas, antialias: true, alpha: true,
+    });
+    this.renderer.shadowMap.enabled = true;
+    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+    this.scene = new THREE.Scene();
+    this.scene.fog = new THREE.Fog(0xe8d4e4, 30, 70);
+
+    this.camera = new THREE.PerspectiveCamera(45, 1, 0.1, 200);
+    this.camTarget = new THREE.Vector3(0, 0, 0);
+    this.camDist = 14;
+    this.camDir = new THREE.Vector3(0, 1.5, 1.12).normalize();
+
+    this._setupLights();
+    this._setupSky();
+
+    this.tilesGroup = new THREE.Group();
+    this.ghostGroup = new THREE.Group();
+    this.fenceGroup = new THREE.Group();
+    this.catsGroup = new THREE.Group();
+    this.scene.add(this.tilesGroup, this.ghostGroup, this.fenceGroup, this.catsGroup);
+
+    this._highlightMesh = this._buildHighlightMesh();
+    this.scene.add(this._highlightMesh);
+
+    this._matCache = new Map();
+    this._spriteTexCache = new Map();
+    this._tileSignature = '';
+    this._ghostSignature = '';
+    this._catObjects = new Map();
+    this._pickMeshes = [];
+    this._raycaster = new THREE.Raycaster();
+    this._lastDraw = 0;
+
+    this.dragging = false;
+    this.lastTouch = null;
     this._bindEvents();
   }
 
+  /* ── Escena base ── */
+
+  _setupLights() {
+    const hemi = new THREE.HemisphereLight(0xfff4e2, 0xb8d8c0, 1.15);
+    this.scene.add(hemi);
+
+    const sun = new THREE.DirectionalLight(0xfff2dc, 1.6);
+    sun.position.set(9, 16, 7);
+    sun.castShadow = true;
+    sun.shadow.mapSize.set(2048, 2048);
+    sun.shadow.camera.left = -18;
+    sun.shadow.camera.right = 18;
+    sun.shadow.camera.top = 18;
+    sun.shadow.camera.bottom = -18;
+    sun.shadow.camera.far = 50;
+    sun.shadow.bias = -0.0004;
+    this.scene.add(sun);
+    this.scene.add(sun.target);
+  }
+
+  _setupSky() {
+    // Nubes low-poly que derivan lentamente
+    this.clouds = new THREE.Group();
+    const cloudMat = new THREE.MeshStandardMaterial({
+      color: 0xfffaf2, flatShading: true, roughness: 1,
+      transparent: true, opacity: 0.85,
+    });
+    for (let i = 0; i < 6; i++) {
+      const cloud = new THREE.Group();
+      const blobs = 2 + (i % 3);
+      for (let b = 0; b < blobs; b++) {
+        const m = new THREE.Mesh(new THREE.IcosahedronGeometry(0.7 + (b % 2) * 0.4, 0), cloudMat);
+        m.position.set(b * 0.9 - blobs * 0.4, (b % 2) * 0.2, (b % 2) * 0.3);
+        m.scale.y = 0.45;
+        cloud.add(m);
+      }
+      cloud.position.set((i - 3) * 6 + (i % 2) * 3, 7 + (i % 3), -6 - (i % 4) * 3);
+      cloud.userData.speed = 0.12 + (i % 3) * 0.05;
+      this.clouds.add(cloud);
+    }
+    this.scene.add(this.clouds);
+  }
+
+  _buildHighlightMesh() {
+    const geo = new THREE.CylinderGeometry(0.99, 0.99, 0.05, 6);
+    const mat = new THREE.MeshBasicMaterial({
+      color: 0xffd28c, transparent: true, opacity: 0.5,
+    });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.visible = false;
+    return mesh;
+  }
+
+  _mat(color, opts = {}) {
+    const key = `${color}|${opts.roughness ?? 0.85}|${opts.emissive ?? 0}`;
+    if (!this._matCache.has(key)) {
+      this._matCache.set(key, new THREE.MeshStandardMaterial({
+        color, flatShading: true, roughness: opts.roughness ?? 0.85,
+        emissive: opts.emissive ?? 0x000000,
+        emissiveIntensity: opts.emissiveIntensity ?? 0.35,
+      }));
+    }
+    return this._matCache.get(key);
+  }
+
+  /* ── Cámara y controles ── */
+
   resize() {
     const rect = this.canvas.parentElement.getBoundingClientRect();
-    const dpr = window.devicePixelRatio || 1;
-    this.canvas.width = rect.width * dpr;
-    this.canvas.height = rect.height * dpr;
-    this.canvas.style.width = `${rect.width}px`;
-    this.canvas.style.height = `${rect.height}px`;
-    this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     this.viewW = rect.width;
     this.viewH = rect.height;
+    this.renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+    this.renderer.setSize(rect.width, rect.height, false);
+    this.camera.aspect = rect.width / Math.max(1, rect.height);
+    this.camera.updateProjectionMatrix();
   }
 
   centerOnHexes(hexes) {
     if (!hexes.size) return;
-    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+    let minX = Infinity; let maxX = -Infinity; let minZ = Infinity; let maxZ = -Infinity;
     hexes.forEach((hex) => {
       const p = axialToPixel(hex.q, hex.r);
-      minX = Math.min(minX, p.x);
-      maxX = Math.max(maxX, p.x);
-      minY = Math.min(minY, p.y);
-      maxY = Math.max(maxY, p.y);
+      minX = Math.min(minX, W(p.x));
+      maxX = Math.max(maxX, W(p.x));
+      minZ = Math.min(minZ, W(p.y));
+      maxZ = Math.max(maxZ, W(p.y));
     });
-    const cx = (minX + maxX) / 2;
-    const cy = (minY + maxY) / 2;
-    this.offsetX = this.viewW / 2 - cx * this.scale;
-    this.offsetY = this.viewH / 2 - cy * this.scale;
+    this.camTarget.set((minX + maxX) / 2, 0, (minZ + maxZ) / 2 + 0.5);
+    const radius = Math.max(3, Math.hypot(maxX - minX, maxZ - minZ) / 2);
+    this.camDist = Math.min(26, Math.max(9, radius * 3.1));
+  }
+
+  _updateCamera() {
+    const pos = this.camDir.clone().multiplyScalar(this.camDist).add(this.camTarget);
+    this.camera.position.copy(pos);
+    this.camera.lookAt(this.camTarget);
   }
 
   _bindEvents() {
@@ -61,7 +173,7 @@ export class Renderer {
 
     c.addEventListener('pointerdown', (e) => {
       this.dragging = true;
-      this.lastTouch = { x: e.clientX, y: e.clientY };
+      this.lastTouch = { x: e.clientX, y: e.clientY, sx: e.clientX, sy: e.clientY };
       c.setPointerCapture(e.pointerId);
     });
 
@@ -69,15 +181,17 @@ export class Renderer {
       if (!this.dragging || !this.lastTouch) return;
       const dx = e.clientX - this.lastTouch.x;
       const dy = e.clientY - this.lastTouch.y;
-      this.offsetX += dx;
-      this.offsetY += dy;
-      this.lastTouch = { x: e.clientX, y: e.clientY };
+      const wpp = (2 * this.camDist * Math.tan((this.camera.fov * Math.PI) / 360)) / Math.max(1, this.viewH);
+      this.camTarget.x -= dx * wpp;
+      this.camTarget.z -= dy * wpp * 1.25;
+      this.lastTouch.x = e.clientX;
+      this.lastTouch.y = e.clientY;
     });
 
     c.addEventListener('pointerup', (e) => {
       if (this.lastTouch) {
-        const dx = e.clientX - this.lastTouch.x;
-        const dy = e.clientY - this.lastTouch.y;
+        const dx = e.clientX - this.lastTouch.sx;
+        const dy = e.clientY - this.lastTouch.sy;
         if (Math.abs(dx) < 6 && Math.abs(dy) < 6) {
           this._onTap(e.clientX, e.clientY);
         }
@@ -88,13 +202,13 @@ export class Renderer {
 
     c.addEventListener('wheel', (e) => {
       e.preventDefault();
-      this._zoomAt(e.clientX, e.clientY, e.deltaY > 0 ? 0.92 : 1.08);
+      this.camDist = Math.max(6, Math.min(30, this.camDist * (e.deltaY > 0 ? 1.08 : 0.92)));
     }, { passive: false });
 
     c.addEventListener('touchstart', (e) => {
       if (e.touches.length === 2) {
         this._pinchStart = this._pinchDistance(e.touches);
-        this._scaleStart = this.scale;
+        this._distStart = this.camDist;
       }
     }, { passive: true });
 
@@ -102,17 +216,7 @@ export class Renderer {
       if (e.touches.length === 2 && this._pinchStart) {
         e.preventDefault();
         const dist = this._pinchDistance(e.touches);
-        const factor = dist / this._pinchStart;
-        const cx = (e.touches[0].clientX + e.touches[1].clientX) / 2;
-        const cy = (e.touches[0].clientY + e.touches[1].clientY) / 2;
-        const newScale = Math.max(0.5, Math.min(2.5, this._scaleStart * factor));
-        const rect = c.getBoundingClientRect();
-        const mx = cx - rect.left;
-        const my = cy - rect.top;
-        const ratio = newScale / this.scale;
-        this.offsetX = mx - (mx - this.offsetX) * ratio;
-        this.offsetY = my - (my - this.offsetY) * ratio;
-        this.scale = newScale;
+        this.camDist = Math.max(6, Math.min(30, this._distStart * (this._pinchStart / dist)));
       }
     }, { passive: false });
 
@@ -127,1250 +231,747 @@ export class Renderer {
     return Math.hypot(dx, dy);
   }
 
-  _zoomAt(clientX, clientY, factor) {
-    const rect = this.canvas.getBoundingClientRect();
-    const mx = clientX - rect.left;
-    const my = clientY - rect.top;
-    const newScale = Math.max(0.5, Math.min(2.5, this.scale * factor));
-    const ratio = newScale / this.scale;
-    this.offsetX = mx - (mx - this.offsetX) * ratio;
-    this.offsetY = my - (my - this.offsetY) * ratio;
-    this.scale = newScale;
-  }
-
   _onTap(clientX, clientY) {
     const rect = this.canvas.getBoundingClientRect();
-    const x = (clientX - rect.left - this.offsetX) / this.scale;
-    const y = (clientY - rect.top - this.offsetY) / this.scale;
-    const { q, r } = pixelToAxial(x, y);
-    const key = axialKey(q, r);
-    if (this.onHexClick) this.onHexClick(key);
-  }
-
-  screenToHex(clientX, clientY) {
-    const rect = this.canvas.getBoundingClientRect();
-    const x = (clientX - rect.left - this.offsetX) / this.scale;
-    const y = (clientY - rect.top - this.offsetY) / this.scale;
-    return { x, y };
-  }
-
-  draw(state, hexes, cats) {
-    const ctx = this.ctx;
-    const now = performance.now();
-    const delta = Math.min(.05, (now - (this._lastDraw || now)) / 1000);
-    this._lastDraw = now;
-    ctx.clearRect(0, 0, this.viewW, this.viewH);
-
-    this._drawBackground();
-
-    ctx.save();
-    ctx.translate(this.offsetX, this.offsetY);
-    ctx.scale(this.scale, this.scale);
-
-    if (this.selectedBuild === 'hex_tile') {
-      this.expandableKeys.forEach((key) => {
-        if (hexes.has(key)) return;
-        const { q, r } = parseKey(key);
-        this._drawGhostHex(q, r);
-      });
-    }
-
-    const sorted = [...hexes.entries()].sort((a, b) => {
-      const pa = axialToPixel(a[1].q, a[1].r);
-      const pb = axialToPixel(b[1].q, b[1].r);
-      return pa.y - pb.y;
-    });
-
-    sorted.forEach(([key, hex]) => {
-      const isExpand = this.expandableKeys.has(key);
-      const isHighlight = this.highlightKey === key;
-      this._drawHex(hex, key, isExpand, isHighlight);
-    });
-
-    this._drawBoundaryFences(hexes);
-
-    cats.forEach((cat) => {
-      if (!hexes.has(cat.hexKey)) return;
-      this._drawCat(cat, hexes.get(cat.hexKey), delta);
-    });
-
-    ctx.restore();
-  }
-
-  _drawBackground() {
-    const ctx = this.ctx;
-    const grd = ctx.createLinearGradient(0, 0, 0, this.viewH);
-    grd.addColorStop(0, '#c8d8f0');
-    grd.addColorStop(0.35, '#e8d0e4');
-    grd.addColorStop(0.7, '#f5dcc8');
-    grd.addColorStop(1, '#f0e4c8');
-    ctx.fillStyle = grd;
-    ctx.fillRect(0, 0, this.viewW, this.viewH);
-
-    const glow = ctx.createRadialGradient(
-      this.viewW * .55, this.viewH * .12, 0,
-      this.viewW * .55, this.viewH * .12, this.viewW * .55,
+    const ndc = new THREE.Vector2(
+      ((clientX - rect.left) / rect.width) * 2 - 1,
+      -((clientY - rect.top) / rect.height) * 2 + 1,
     );
-    glow.addColorStop(0, 'rgba(255, 245, 200, .55)');
-    glow.addColorStop(1, 'rgba(255, 245, 200, 0)');
-    ctx.fillStyle = glow;
-    ctx.fillRect(0, 0, this.viewW, this.viewH);
-
-    // Soft cloud blobs (flat depth layers)
-    ctx.save();
-    const t = Date.now() / 18000;
-    for (let i = 0; i < 6; i++) {
-      const x = ((i * 160 + t * (12 + i * 3)) % (this.viewW + 120)) - 60;
-      const y = 28 + (i % 3) * 36;
-      ctx.globalAlpha = .22 + (i % 3) * .04;
-      ctx.fillStyle = '#fff8f0';
-      this._softBlob(ctx, x, y, 38 + (i % 3) * 10, 14);
-      this._softBlob(ctx, x + 22, y - 4, 28, 12);
+    this._raycaster.setFromCamera(ndc, this.camera);
+    const hits = this._raycaster.intersectObjects(this._pickMeshes, false);
+    if (hits.length && this.onHexClick) {
+      this.onHexClick(hits[0].object.userData.hexKey);
     }
-    ctx.restore();
-
-    ctx.save();
-    ctx.globalAlpha = .14;
-    ctx.fillStyle = '#fff8e8';
-    for (let i = 0; i < 22; i++) {
-      const x = (i * 137 + t * (6 + i % 3) * 14) % (this.viewW + 40) - 20;
-      const y = (i * 83) % Math.max(this.viewH, 1);
-      ctx.beginPath();
-      ctx.arc(x, y, 1.2 + (i % 3) * .5, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    ctx.restore();
   }
 
-  _softBlob(ctx, x, y, rx, ry) {
-    ctx.beginPath();
-    ctx.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2);
-    ctx.fill();
+  /* ── Casillas ── */
+
+  _syncTiles(hexes) {
+    const sig = [...hexes.entries()]
+      .map(([key, hex]) => `${key}:${hex.building || ''}:${hex.level || 1}`)
+      .sort()
+      .join('|');
+    if (sig === this._tileSignature) return;
+    this._tileSignature = sig;
+
+    this._disposeGroup(this.tilesGroup);
+    this._disposeGroup(this.fenceGroup);
+    this._pickMeshes = this._pickMeshes.filter((m) => m.userData.ghost);
+
+    hexes.forEach((hex, key) => {
+      const { x, y } = axialToPixel(hex.q, hex.r);
+      const tile = this._buildTile(hex, key);
+      tile.position.set(W(x), 0, W(y));
+      this.tilesGroup.add(tile);
+    });
+
+    this._buildFences(hexes);
   }
 
-  _drawHex(hex, key, isExpandable, isHighlight) {
-    const { q, r } = hex;
-    const { x, y } = axialToPixel(q, r);
-    const size = HEX_SIZE;
-    const corners = getHexCorners(x, y, size - 1);
+  _buildTile(hex, key) {
+    const group = new THREE.Group();
+    const hash = Math.abs(hex.q * 7 + hex.r * 13) % 3;
 
-    const hash = Math.abs(q * 7 + r * 13) % 3;
-    const baseColor = COLORS.grass[hash];
-
-    this._drawHexPrism(corners, baseColor, 0.12, isHighlight, isExpandable);
-    this._drawGroundDetails(x, y, q, r, Boolean(hex.building));
+    const top = this._mat(PALETTE.grass[hash]);
+    const side = this._mat(PALETTE.grassSide);
+    const geo = new THREE.CylinderGeometry(0.995, 1.0, 0.4, 6);
+    const prism = new THREE.Mesh(geo, [side, top, side]);
+    prism.position.y = -0.2;
+    prism.receiveShadow = true;
+    prism.userData.hexKey = key;
+    group.add(prism);
+    this._pickMeshes.push(prism);
 
     if (hex.building && BUILDINGS[hex.building]) {
-      this._drawBuilding(x, y, hex);
-    }
-
-    if (isExpandable && this.selectedBuild === 'hex_tile') {
-      this._drawExpandHint(corners);
-    }
-  }
-
-  _drawHexPrism(corners, topColor, depth, highlight, expandable) {
-    const ctx = this.ctx;
-    const depthPx = depth * HEX_SIZE * 2.6;
-
-    // Soft ground shadow under hex (flat depth)
-    const cx = corners.reduce((s, c) => s + c.x, 0) / 6;
-    const cy = corners.reduce((s, c) => s + c.y, 0) / 6;
-    const softShadow = ctx.createRadialGradient(cx + 2, cy + depthPx + 4, 2, cx + 2, cy + depthPx + 4, HEX_SIZE * .95);
-    softShadow.addColorStop(0, 'rgba(100, 80, 110, .16)');
-    softShadow.addColorStop(1, 'rgba(100, 80, 110, 0)');
-    ctx.fillStyle = softShadow;
-    ctx.beginPath();
-    ctx.ellipse(cx + 2, cy + depthPx + 5, HEX_SIZE * .9, HEX_SIZE * .42, 0, 0, Math.PI * 2);
-    ctx.fill();
-
-    ctx.beginPath();
-    corners.forEach((c, i) => {
-      if (i === 0) ctx.moveTo(c.x, c.y + depthPx);
-      else ctx.lineTo(c.x, c.y + depthPx);
-    });
-    ctx.closePath();
-    ctx.fillStyle = COLORS.grassDark[1];
-    ctx.fill();
-
-    for (let i = 0; i < 6; i++) {
-      const c1 = corners[i];
-      const c2 = corners[(i + 1) % 6];
-      ctx.beginPath();
-      ctx.moveTo(c1.x, c1.y);
-      ctx.lineTo(c2.x, c2.y);
-      ctx.lineTo(c2.x, c2.y + depthPx);
-      ctx.lineTo(c1.x, c1.y + depthPx);
-      ctx.closePath();
-      const sideGrad = ctx.createLinearGradient(c1.x, c1.y, c1.x, c1.y + depthPx);
-      const mid = i % 2 === 0 ? COLORS.grassDark[0] : COLORS.grassDark[2];
-      sideGrad.addColorStop(0, this._lighten(mid, .08));
-      sideGrad.addColorStop(1, mid);
-      ctx.fillStyle = sideGrad;
-      ctx.fill();
-    }
-
-    ctx.beginPath();
-    corners.forEach((c, i) => {
-      if (i === 0) ctx.moveTo(c.x, c.y);
-      else ctx.lineTo(c.x, c.y);
-    });
-    ctx.closePath();
-
-    if (expandable) {
-      ctx.fillStyle = 'rgba(255, 210, 140, 0.4)';
-    } else if (highlight) {
-      ctx.fillStyle = 'rgba(255, 210, 140, 0.58)';
+      const building = this._buildBuilding(hex);
+      group.add(building);
+      if ((hex.level || 1) > 1) {
+        const badge = this._makeTextSprite(`★${hex.level}`, {
+          bg: 'rgba(255,244,214,.95)', fg: '#8a6050', size: 42,
+        });
+        badge.position.set(0.45, 1.35, 0);
+        group.add(badge);
+      }
     } else {
-      const topGradient = ctx.createLinearGradient(
-        corners[0].x, corners[2].y,
-        corners[3].x, corners[5].y,
-      );
-      topGradient.addColorStop(0, this._lighten(topColor, .18));
-      topGradient.addColorStop(.55, topColor);
-      topGradient.addColorStop(1, this._darken(topColor, .06));
-      ctx.fillStyle = topGradient;
+      this._addGroundDetails(group, hex);
     }
-    ctx.fill();
-    ctx.strokeStyle = 'rgba(120, 170, 130, .55)';
-    ctx.lineWidth = 2;
-    ctx.lineJoin = 'round';
-    ctx.stroke();
-
-    ctx.save();
-    ctx.clip();
-    const shine = ctx.createLinearGradient(0, corners[2].y, 0, corners[5].y);
-    shine.addColorStop(0, 'rgba(255,255,240,.22)');
-    shine.addColorStop(.45, 'rgba(255,255,240,0)');
-    ctx.fillStyle = shine;
-    ctx.fillRect(corners[4].x, corners[2].y, corners[1].x - corners[4].x, corners[5].y - corners[2].y);
-    ctx.restore();
+    return group;
   }
 
-  _drawGhostHex(q, r) {
-    const { x, y } = axialToPixel(q, r);
-    const corners = getHexCorners(x, y, HEX_SIZE - 3);
-    const ctx = this.ctx;
-    const pulse = .3 + Math.sin(Date.now() / 320) * .08;
-    ctx.save();
-    ctx.setLineDash([5, 5]);
-    ctx.beginPath();
-    corners.forEach((corner, i) => i ? ctx.lineTo(corner.x, corner.y) : ctx.moveTo(corner.x, corner.y));
-    ctx.closePath();
-    ctx.fillStyle = `rgba(255,225,146,${pulse})`;
-    ctx.fill();
-    ctx.strokeStyle = 'rgba(255,239,188,.9)';
-    ctx.lineWidth = 2;
-    ctx.stroke();
-    ctx.setLineDash([]);
-    ctx.font = `700 ${HEX_SIZE * .38}px Nunito, sans-serif`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillStyle = '#fff1bc';
-    ctx.fillText('+', x, y);
-    ctx.restore();
-  }
-
-  _drawGroundDetails(x, y, q, r, occupied) {
-    if (occupied) return;
-    const hash = Math.abs(q * 31 + r * 17);
+  _addGroundDetails(group, hex) {
+    const hash = Math.abs(hex.q * 31 + hex.r * 17);
     if (hash % 3 !== 0) return;
-    const ctx = this.ctx;
-    ctx.save();
-    ctx.globalAlpha = .8;
-    const ox = ((hash % 19) - 9) * 1.15;
-    const oy = (((hash * 7) % 15) - 7) * .75;
+    const ox = ((hash % 19) - 9) * 0.045;
+    const oz = (((hash * 7) % 15) - 7) * 0.045;
     if (hash % 2 === 0) {
-      // Soft pastel flower
-      const petal = hash % 4 === 0 ? '#f8d890' : '#f8b0b8';
-      ctx.fillStyle = petal;
-      for (let i = 0; i < 5; i++) {
-        const a = i * Math.PI * 2 / 5 - Math.PI / 2;
-        ctx.beginPath();
-        ctx.ellipse(
-          x + ox + Math.cos(a) * 2.6,
-          y + oy + Math.sin(a) * 2.6,
-          2.2, 1.6, a, 0, Math.PI * 2,
-        );
-        ctx.fill();
-      }
-      const center = ctx.createRadialGradient(x + ox, y + oy, .2, x + ox, y + oy, 2);
-      center.addColorStop(0, '#fff8c8');
-      center.addColorStop(1, '#f0d070');
-      ctx.fillStyle = center;
-      ctx.beginPath();
-      ctx.arc(x + ox, y + oy, 1.6, 0, Math.PI * 2);
-      ctx.fill();
+      const stem = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.012, 0.018, 0.16, 5),
+        this._mat(0x78b888),
+      );
+      stem.position.set(ox, 0.08, oz);
+      group.add(stem);
+      const bloom = new THREE.Mesh(
+        new THREE.IcosahedronGeometry(0.07, 0),
+        this._mat(hash % 4 === 0 ? 0xf8d890 : 0xf8b0b8),
+      );
+      bloom.position.set(ox, 0.19, oz);
+      bloom.castShadow = true;
+      group.add(bloom);
     } else {
-      ctx.strokeStyle = '#78b888';
-      ctx.lineWidth = 1.6;
-      ctx.lineCap = 'round';
-      ctx.beginPath();
-      ctx.moveTo(x + ox, y + oy + 4);
-      ctx.quadraticCurveTo(x + ox - 2, y + oy, x + ox - 4, y + oy - 3);
-      ctx.moveTo(x + ox, y + oy + 4);
-      ctx.quadraticCurveTo(x + ox + 2, y + oy, x + ox + 4, y + oy - 3);
-      ctx.stroke();
-    }
-    ctx.restore();
-  }
-
-  _drawExpandHint(corners) {
-    const ctx = this.ctx;
-    const cx = corners.reduce((s, c) => s + c.x, 0) / 6;
-    const cy = corners.reduce((s, c) => s + c.y, 0) / 6;
-    ctx.font = `${HEX_SIZE * 0.5}px sans-serif`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText('⬡', cx, cy);
-  }
-
-  _drawBuilding(x, y, hex) {
-    const b = BUILDINGS[hex.building];
-    if (!b) return;
-    const ctx = this.ctx;
-    ctx.save();
-    ctx.translate(x, y);
-    this._drawCastShadow(ctx, b.height || .3);
-
-    const painters = {
-      food_bowl: () => this._drawFoodBowl(ctx),
-      water_fountain: () => this._drawWaterFountain(ctx),
-      bed: () => this._drawBed(ctx, false),
-      double_bed: () => this._drawBed(ctx, true),
-      scratcher: () => this._drawScratcher(ctx),
-      toy_ball: () => this._drawToyBall(ctx),
-      litter_box: () => this._drawLitterBox(ctx),
-      lamp: () => this._drawLamp(ctx, hex.level || 1),
-      catnip_plant: () => this._drawPlant(ctx, hex.level || 1),
-      garden: () => this._drawGarden(ctx, hex.level || 1),
-      shelter: () => this._drawShelter(ctx),
-      tree: () => this._drawTree(ctx),
-    };
-    (painters[hex.building] || (() => this._drawCrate(ctx, b.color)))();
-
-    if (hex.level > 1) {
-      ctx.fillStyle = 'rgba(90, 70, 100, .15)';
-      ctx.beginPath();
-      ctx.arc(14, -24, 8, 0, Math.PI * 2);
-      ctx.fill();
-      const badge = ctx.createRadialGradient(11, -27, 1, 13, -25, 8);
-      badge.addColorStop(0, '#fff8e0');
-      badge.addColorStop(1, '#f0c878');
-      ctx.fillStyle = badge;
-      ctx.strokeStyle = '#e8b070';
-      ctx.lineWidth = 1.4;
-      ctx.beginPath();
-      ctx.arc(13, -25, 7.5, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.stroke();
-      ctx.font = `800 7px Nunito, sans-serif`;
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      ctx.fillStyle = '#8a6050';
-      ctx.fillText(`${hex.level}★`, 13, -25);
-    }
-
-    ctx.restore();
-  }
-
-  _drawCastShadow(ctx, height) {
-    const shadow = ctx.createRadialGradient(2, 10, 1, 2, 10, 20 + height * 4);
-    shadow.addColorStop(0, 'rgba(90, 70, 100, .22)');
-    shadow.addColorStop(.55, 'rgba(90, 70, 100, .1)');
-    shadow.addColorStop(1, 'rgba(90, 70, 100, 0)');
-    ctx.fillStyle = shadow;
-    ctx.save();
-    ctx.transform(1, .06, -.4, .42, 0, 0);
-    ctx.beginPath();
-    ctx.arc(6, 12, 20, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.restore();
-  }
-
-  _drawFoodBowl(ctx) {
-    // Soft shadow layer already cast; pastel rounded bowl
-    const base = ctx.createLinearGradient(0, -2, 0, 10);
-    base.addColorStop(0, '#e8b898');
-    base.addColorStop(1, '#c88868');
-    ctx.fillStyle = base;
-    ctx.beginPath();
-    ctx.ellipse(0, 4, 14, 7, 0, 0, Math.PI * 2);
-    ctx.fill();
-    const rim = ctx.createLinearGradient(0, -4, 0, 6);
-    rim.addColorStop(0, '#ffe0c0');
-    rim.addColorStop(1, '#e8a878');
-    ctx.fillStyle = rim;
-    ctx.beginPath();
-    ctx.ellipse(0, 1, 14, 6, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = '#c88870';
-    ctx.lineWidth = 1.4;
-    ctx.lineJoin = 'round';
-    ctx.stroke();
-    ctx.fillStyle = '#a87858';
-    ctx.beginPath();
-    ctx.ellipse(0, 1, 10.5, 3.8, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ['-6,-1', '-2,2', '3,-1', '7,1', '0,-2'].forEach((value) => {
-      const [px, py] = value.split(',').map(Number);
-      const crumb = ctx.createRadialGradient(px, py, .2, px, py, 1.8);
-      crumb.addColorStop(0, '#f0c890');
-      crumb.addColorStop(1, '#d09860');
-      ctx.fillStyle = crumb;
-      ctx.beginPath();
-      ctx.arc(px, py, 1.7, 0, Math.PI * 2);
-      ctx.fill();
-    });
-    ctx.strokeStyle = 'rgba(255,240,210,.55)';
-    ctx.lineWidth = 1.5;
-    ctx.beginPath();
-    ctx.ellipse(-3, -1, 7, 2, 0, Math.PI, Math.PI * 1.8);
-    ctx.stroke();
-  }
-
-  _drawWaterFountain(ctx) {
-    ctx.fillStyle = '#567481';
-    ctx.beginPath();
-    ctx.ellipse(0, 5, 15, 7, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = '#8cb5bd';
-    ctx.beginPath();
-    ctx.ellipse(0, 2, 15, 6, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = '#405d68';
-    ctx.lineWidth = 1.2;
-    ctx.stroke();
-    const water = ctx.createRadialGradient(-3, 0, 1, 0, 2, 11);
-    water.addColorStop(0, '#d8f5ed');
-    water.addColorStop(1, '#65b7cc');
-    ctx.fillStyle = water;
-    ctx.beginPath();
-    ctx.ellipse(0, 1, 11, 3.8, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = '#527782';
-    ctx.fillRect(-2.5, -13, 5, 14);
-    ctx.beginPath();
-    ctx.ellipse(0, -13, 7, 3.2, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = 'rgba(218,250,245,.9)';
-    ctx.lineWidth = 1.4;
-    const stream = Math.sin(Date.now() / 220) * .5;
-    ctx.beginPath();
-    ctx.moveTo(-4, -12);
-    ctx.quadraticCurveTo(-6 + stream, -5, -5, 0);
-    ctx.moveTo(4, -12);
-    ctx.quadraticCurveTo(6 - stream, -5, 5, 0);
-    ctx.stroke();
-  }
-
-  _drawBed(ctx, double) {
-    const width = double ? 29 : 22;
-    ctx.fillStyle = '#b898c0';
-    ctx.beginPath();
-    ctx.roundRect(-width / 2, -2, width, 12, 6);
-    ctx.fill();
-    const cushion = ctx.createLinearGradient(0, -8, 0, 7);
-    cushion.addColorStop(0, '#ffe0e8');
-    cushion.addColorStop(1, '#e8b0c0');
-    ctx.fillStyle = cushion;
-    ctx.beginPath();
-    ctx.ellipse(0, -1, width / 2 - 1, 8, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = '#c898b0';
-    ctx.lineWidth = 1.3;
-    ctx.stroke();
-    ctx.fillStyle = '#fff0f4';
-    const pillows = double ? [-7, 7] : [0];
-    pillows.forEach((px) => {
-      ctx.beginPath();
-      ctx.ellipse(px, -4, double ? 6 : 8, 3.6, -.08, 0, Math.PI * 2);
-      ctx.fill();
-    });
-    ctx.strokeStyle = 'rgba(255,245,250,.65)';
-    ctx.lineWidth = 1.4;
-    ctx.beginPath();
-    ctx.moveTo(-width / 2 + 4, 3);
-    ctx.quadraticCurveTo(0, 8, width / 2 - 4, 3);
-    ctx.stroke();
-  }
-
-  _drawScratcher(ctx) {
-    ctx.fillStyle = '#6c4e43';
-    ctx.beginPath();
-    ctx.ellipse(0, 7, 13, 5, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = '#9b7355';
-    ctx.beginPath();
-    ctx.ellipse(0, 5, 13, 4, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = '#85613f';
-    ctx.lineWidth = 6;
-    ctx.beginPath();
-    ctx.moveTo(0, 4);
-    ctx.lineTo(0, -22);
-    ctx.stroke();
-    ctx.strokeStyle = '#c69a62';
-    ctx.lineWidth = 1;
-    for (let y = -19; y < 3; y += 3) {
-      ctx.beginPath();
-      ctx.moveTo(-3, y);
-      ctx.lineTo(3, y + 1);
-      ctx.stroke();
-    }
-    ctx.fillStyle = '#795765';
-    ctx.beginPath();
-    ctx.ellipse(0, -23, 10, 4.5, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = '#b9879d';
-    ctx.beginPath();
-    ctx.ellipse(0, -25, 10, 4, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = '#886675';
-    ctx.stroke();
-    ctx.strokeStyle = '#73533f';
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(6, -23);
-    ctx.lineTo(8, -12);
-    ctx.stroke();
-    ctx.fillStyle = '#e2aa5d';
-    ctx.beginPath();
-    ctx.arc(8, -10, 2.5, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  _drawToyBall(ctx) {
-    const ball = ctx.createRadialGradient(-4, -6, 1, 0, 0, 11);
-    ball.addColorStop(0, '#ffd59b');
-    ball.addColorStop(.35, '#ed826e');
-    ball.addColorStop(1, '#9b4455');
-    ctx.fillStyle = ball;
-    ctx.beginPath();
-    ctx.arc(0, 0, 10, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = '#75394b';
-    ctx.lineWidth = 1.2;
-    ctx.stroke();
-    ctx.strokeStyle = 'rgba(255,220,170,.65)';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.arc(0, 0, 6, -.8, 1.7);
-    ctx.stroke();
-  }
-
-  _drawLitterBox(ctx) {
-    ctx.fillStyle = '#5e6b73';
-    ctx.beginPath();
-    ctx.moveTo(-15, -4);
-    ctx.lineTo(15, -4);
-    ctx.lineTo(12, 8);
-    ctx.quadraticCurveTo(0, 12, -12, 8);
-    ctx.closePath();
-    ctx.fill();
-    ctx.fillStyle = '#8b9ba0';
-    ctx.beginPath();
-    ctx.ellipse(0, -3, 15, 6, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = '#49575f';
-    ctx.lineWidth = 1.2;
-    ctx.stroke();
-    ctx.fillStyle = '#d7c39c';
-    ctx.beginPath();
-    ctx.ellipse(0, -3, 11.5, 3.5, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = '#b79e73';
-    for (let i = 0; i < 9; i++) {
-      ctx.beginPath();
-      ctx.arc(-8 + i * 2, -3 + (i % 2), .65, 0, Math.PI * 2);
-      ctx.fill();
-    }
-  }
-
-  _drawLamp(ctx, level) {
-    const radius = 16 + level * 2;
-    const glow = ctx.createRadialGradient(0, -19, 0, 0, -19, radius);
-    glow.addColorStop(0, 'rgba(255,232,143,.55)');
-    glow.addColorStop(1, 'rgba(255,211,111,0)');
-    ctx.fillStyle = glow;
-    ctx.beginPath();
-    ctx.arc(0, -19, radius, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillStyle = '#574454';
-    ctx.beginPath();
-    ctx.ellipse(0, 7, 8, 3.5, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.fillRect(-2, -18, 4, 25);
-    const shade = ctx.createLinearGradient(-8, -28, 8, -12);
-    shade.addColorStop(0, '#fff0ac');
-    shade.addColorStop(1, '#d49a50');
-    ctx.fillStyle = shade;
-    ctx.beginPath();
-    ctx.moveTo(-5, -27);
-    ctx.lineTo(5, -27);
-    ctx.lineTo(10, -14);
-    ctx.quadraticCurveTo(0, -10, -10, -14);
-    ctx.closePath();
-    ctx.fill();
-    ctx.strokeStyle = '#8a6044';
-    ctx.lineWidth = 1.2;
-    ctx.stroke();
-    ctx.fillStyle = '#fff4bd';
-    ctx.beginPath();
-    ctx.ellipse(0, -14, 7, 2.5, 0, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  _drawPlant(ctx, level) {
-    ctx.fillStyle = '#744c45';
-    ctx.beginPath();
-    ctx.moveTo(-8, -2);
-    ctx.lineTo(8, -2);
-    ctx.lineTo(6, 9);
-    ctx.quadraticCurveTo(0, 12, -6, 9);
-    ctx.closePath();
-    ctx.fill();
-    ctx.fillStyle = '#b16e55';
-    ctx.beginPath();
-    ctx.ellipse(0, -2, 9, 3.5, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = '#39734d';
-    ctx.lineWidth = 1.5;
-    const leaves = 6 + level * 2;
-    for (let i = 0; i < leaves; i++) {
-      const angle = (i / leaves) * Math.PI * 2;
-      const length = 11 + (i % 3) * 3;
-      const ex = Math.cos(angle) * length;
-      const ey = -5 + Math.sin(angle) * length * .55;
-      ctx.beginPath();
-      ctx.moveTo(0, -2);
-      ctx.quadraticCurveTo(ex * .45, ey - 4, ex, ey);
-      ctx.stroke();
-      ctx.fillStyle = i % 2 ? '#68a665' : '#8ac279';
-      ctx.beginPath();
-      ctx.ellipse(ex, ey, 4.5, 2.3, angle, 0, Math.PI * 2);
-      ctx.fill();
-    }
-  }
-
-  _drawGarden(ctx, level) {
-    ctx.strokeStyle = '#8a7058';
-    ctx.lineWidth = 3;
-    ctx.beginPath();
-    ctx.ellipse(0, 4, 17, 9, 0, 0, Math.PI * 2);
-    ctx.stroke();
-    ctx.fillStyle = '#426f4d';
-    ctx.beginPath();
-    ctx.ellipse(0, 3, 15, 7, 0, 0, Math.PI * 2);
-    ctx.fill();
-    const colors = ['#f2a3ac', '#f4ce75', '#bca1db', '#f1eee2'];
-    const count = 5 + level * 2;
-    for (let i = 0; i < count; i++) {
-      const angle = i * 2.4;
-      const radius = 3 + (i % 3) * 4;
-      const px = Math.cos(angle) * radius;
-      const py = Math.sin(angle) * radius * .45;
-      ctx.strokeStyle = '#4d8355';
-      ctx.lineWidth = 1;
-      ctx.beginPath();
-      ctx.moveTo(px, py + 3);
-      ctx.lineTo(px, py - 4);
-      ctx.stroke();
-      ctx.fillStyle = colors[i % colors.length];
-      for (let petal = 0; petal < 4; petal++) {
-        const a = petal * Math.PI / 2;
-        ctx.beginPath();
-        ctx.arc(px + Math.cos(a) * 2, py - 4 + Math.sin(a) * 2, 1.5, 0, Math.PI * 2);
-        ctx.fill();
+      for (let i = 0; i < 3; i++) {
+        const blade = new THREE.Mesh(
+          new THREE.ConeGeometry(0.03, 0.16, 4),
+          this._mat(0x84c08c),
+        );
+        blade.position.set(ox + (i - 1) * 0.08, 0.08, oz + (i % 2) * 0.05);
+        blade.rotation.z = (i - 1) * 0.2;
+        group.add(blade);
       }
-      ctx.fillStyle = '#f9dd79';
-      ctx.beginPath();
-      ctx.arc(px, py - 4, 1, 0, Math.PI * 2);
-      ctx.fill();
     }
   }
 
-  _drawShelter(ctx) {
-    ctx.fillStyle = '#7b4c3d';
-    ctx.beginPath();
-    ctx.moveTo(-15, -13);
-    ctx.lineTo(15, -13);
-    ctx.lineTo(15, 8);
-    ctx.lineTo(-15, 8);
-    ctx.closePath();
-    ctx.fill();
-    ctx.fillStyle = '#a9684c';
-    for (let x = -12; x < 14; x += 5) ctx.fillRect(x, -11, 2, 18);
-    ctx.fillStyle = '#54384a';
-    ctx.beginPath();
-    ctx.arc(0, 2, 7, Math.PI, 0);
-    ctx.lineTo(7, 8);
-    ctx.lineTo(-7, 8);
-    ctx.closePath();
-    ctx.fill();
-    const roof = ctx.createLinearGradient(0, -28, 0, -10);
-    roof.addColorStop(0, '#d68d66');
-    roof.addColorStop(1, '#934f46');
-    ctx.fillStyle = roof;
-    ctx.beginPath();
-    ctx.moveTo(-19, -12);
-    ctx.lineTo(0, -29);
-    ctx.lineTo(19, -12);
-    ctx.lineTo(14, -8);
-    ctx.lineTo(0, -22);
-    ctx.lineTo(-14, -8);
-    ctx.closePath();
-    ctx.fill();
-    ctx.strokeStyle = '#6f4040';
-    ctx.lineWidth = 1.3;
-    ctx.stroke();
-  }
+  _syncGhosts(hexes) {
+    const active = this.selectedBuild === 'hex_tile';
+    const sig = active ? [...this.expandableKeys].sort().join('|') : '';
+    if (sig === this._ghostSignature) return;
+    this._ghostSignature = sig;
 
-  _drawTree(ctx) {
-    const trunk = ctx.createLinearGradient(-5, 0, 6, 0);
-    trunk.addColorStop(0, '#5d3d35');
-    trunk.addColorStop(.5, '#9b6a46');
-    trunk.addColorStop(1, '#4c3532');
-    ctx.fillStyle = trunk;
-    ctx.beginPath();
-    ctx.moveTo(-5, 7);
-    ctx.lineTo(-3, -19);
-    ctx.lineTo(5, -19);
-    ctx.lineTo(7, 7);
-    ctx.closePath();
-    ctx.fill();
-    ctx.strokeStyle = '#5b4034';
-    ctx.lineWidth = 2;
-    ctx.beginPath();
-    ctx.moveTo(0, -10); ctx.lineTo(-10, -23);
-    ctx.moveTo(2, -13); ctx.lineTo(12, -27);
-    ctx.stroke();
-    const clusters = [
-      [-10, -25, 11, '#5c9462'], [8, -28, 13, '#4f8858'],
-      [0, -37, 14, '#74a86b'], [16, -19, 9, '#659b62'], [-16, -15, 9, '#6ca168'],
-    ];
-    clusters.forEach(([px, py, size, color]) => {
-      const leaf = ctx.createRadialGradient(px - 3, py - 4, 1, px, py, size);
-      leaf.addColorStop(0, this._lighten(color, .14));
-      leaf.addColorStop(1, color);
-      ctx.fillStyle = leaf;
-      ctx.beginPath();
-      ctx.arc(px, py, size, 0, Math.PI * 2);
-      ctx.fill();
+    this._disposeGroup(this.ghostGroup);
+    this._pickMeshes = this._pickMeshes.filter((m) => !m.userData.ghost);
+
+    if (!active) return;
+    if (!this._ghostMat) {
+      this._ghostMat = new THREE.MeshBasicMaterial({
+        color: PALETTE.ghost, transparent: true, opacity: 0.35,
+      });
+    }
+    this.expandableKeys.forEach((key) => {
+      if (hexes.has(key)) return;
+      const [q, r] = key.split(',').map(Number);
+      const { x, y } = axialToPixel(q, r);
+      const mesh = new THREE.Mesh(
+        new THREE.CylinderGeometry(0.92, 0.92, 0.06, 6),
+        this._ghostMat,
+      );
+      mesh.position.set(W(x), 0.03, W(y));
+      mesh.userData.hexKey = key;
+      mesh.userData.ghost = true;
+      this.ghostGroup.add(mesh);
+      this._pickMeshes.push(mesh);
     });
   }
 
-  _drawCrate(ctx, color = '#8d684c') {
-    ctx.fillStyle = this._darken(color, .18);
-    ctx.fillRect(-11, -11, 22, 19);
-    ctx.fillStyle = color;
-    ctx.fillRect(-10, -12, 20, 17);
-    ctx.strokeStyle = this._darken(color, .32);
-    ctx.lineWidth = 2;
-    ctx.strokeRect(-10, -12, 20, 17);
-    ctx.beginPath();
-    ctx.moveTo(-9, -11); ctx.lineTo(9, 4);
-    ctx.moveTo(9, -11); ctx.lineTo(-9, 4);
-    ctx.stroke();
-  }
-
-  _drawBoundaryFences(hexes) {
+  _buildFences(hexes) {
     const edgeByDirection = [[0, 1], [5, 0], [4, 5], [3, 4], [2, 3], [1, 2]];
-    const ctx = this.ctx;
-    ctx.save();
+    const postMat = this._mat(PALETTE.fence);
+    const railMat = this._mat(PALETTE.fenceLight);
+    const postGeo = new THREE.BoxGeometry(0.09, 0.34, 0.09);
+    const posts = new Set();
+
     hexes.forEach((hex) => {
       const { x, y } = axialToPixel(hex.q, hex.r);
-      const corners = getHexCorners(x, y, HEX_SIZE - 1);
+      const corners = getHexCorners(W(x) * HEX_SIZE, W(y) * HEX_SIZE, HEX_SIZE - 2);
       hexNeighbors(hex.q, hex.r).forEach((neighbor, direction) => {
         if (hexes.has(axialKey(neighbor.q, neighbor.r))) return;
-        const [aIndex, bIndex] = edgeByDirection[direction];
-        const a = corners[aIndex];
-        const b = corners[bIndex];
-        const dx = b.x - a.x;
-        const dy = b.y - a.y;
-        const length = Math.hypot(dx, dy);
-        const nx = -dy / length;
-        const ny = dx / length;
+        const [aIdx, bIdx] = edgeByDirection[direction];
+        const a = { x: W(corners[aIdx].x), z: W(corners[aIdx].y) };
+        const b = { x: W(corners[bIdx].x), z: W(corners[bIdx].y) };
 
-        ctx.strokeStyle = '#c89878';
-        ctx.lineWidth = 3;
-        ctx.lineCap = 'round';
-        ctx.beginPath();
-        ctx.moveTo(a.x + nx * 2, a.y + ny * 2 - 5);
-        ctx.lineTo(b.x + nx * 2, b.y + ny * 2 - 5);
-        ctx.stroke();
-        ctx.strokeStyle = '#e8c8a8';
-        ctx.lineWidth = 1.2;
-        ctx.beginPath();
-        ctx.moveTo(a.x + nx * 2, a.y + ny * 2 - 6.5);
-        ctx.lineTo(b.x + nx * 2, b.y + ny * 2 - 6.5);
-        ctx.stroke();
-
-        [a, b].forEach((point) => {
-          const postGrad = ctx.createLinearGradient(point.x - 2, point.y - 9, point.x + 2, point.y + 2);
-          postGrad.addColorStop(0, '#e0b890');
-          postGrad.addColorStop(1, '#b88868');
-          ctx.fillStyle = postGrad;
-          ctx.beginPath();
-          ctx.roundRect(point.x - 2.2, point.y - 9, 4.4, 11, 2);
-          ctx.fill();
+        [a, b].forEach((pt) => {
+          const pk = `${pt.x.toFixed(2)},${pt.z.toFixed(2)}`;
+          if (posts.has(pk)) return;
+          posts.add(pk);
+          const post = new THREE.Mesh(postGeo, postMat);
+          post.position.set(pt.x, 0.17, pt.z);
+          post.castShadow = true;
+          this.fenceGroup.add(post);
         });
+
+        const len = Math.hypot(b.x - a.x, b.z - a.z);
+        const rail = new THREE.Mesh(new THREE.BoxGeometry(len, 0.06, 0.05), railMat);
+        rail.position.set((a.x + b.x) / 2, 0.24, (a.z + b.z) / 2);
+        rail.rotation.y = -Math.atan2(b.z - a.z, b.x - a.x);
+        rail.castShadow = true;
+        this.fenceGroup.add(rail);
       });
     });
-    ctx.restore();
   }
 
-  _getCatRenderState(cat, hex, delta) {
-    const destination = axialToPixel(hex.q, hex.r);
-    let state = this.catAnimations.get(cat.id);
-    if (!state) {
-      state = { x: destination.x, y: destination.y, facing: 1, moving: false, bob: 0 };
-      this.catAnimations.set(cat.id, state);
-    }
+  /* ── Edificios low-poly ── */
 
-    const dx = destination.x - state.x;
-    const dy = destination.y - state.y;
-    const distance = Math.hypot(dx, dy);
-    state.moving = distance > 1.2;
-    if (state.moving) {
-      const step = Math.min(distance, 78 * delta);
-      state.x += (dx / distance) * step;
-      state.y += (dy / distance) * step;
-      if (Math.abs(dx) > .5) state.facing = dx < 0 ? -1 : 1;
-    } else {
-      state.x = destination.x;
-      state.y = destination.y;
-    }
-    return state;
-  }
-
-  _drawCat(cat, hex, delta) {
-    const render = this._getCatRenderState(cat, hex, delta);
-    const { x, y, facing, moving } = render;
-    const ctx = this.ctx;
-    const t = Date.now() / 1000;
-    const seed = [...cat.id].reduce((sum, char) => sum + char.charCodeAt(0), 0);
-    const phase = t * (moving ? 9 : 2.2) + seed;
-    const appearance = cat.appearance || {
-      coat: '#f0c4a0', dark: '#d49a72', light: '#fff0dc', pattern: 'tabby',
-      eyes: '#8ecf7a', blush: '#f5a8b0',
+  _buildBuilding(hex) {
+    const g = new THREE.Group();
+    const level = hex.level || 1;
+    const add = (mesh, x, y, z) => {
+      mesh.position.set(x, y, z);
+      mesh.castShadow = true;
+      mesh.receiveShadow = true;
+      g.add(mesh);
+      return mesh;
     };
-    if (!appearance.blush) appearance.blush = '#f5a8b0';
-    let activity = moving ? 'walk' : (cat.activity || 'explore');
+    const M = (geo, color) => new THREE.Mesh(geo, this._mat(color));
 
-    ctx.save();
-    ctx.translate(x, y - 4);
-    ctx.scale(facing, 1);
-
-    // Soft flat shadow
-    const shadow = ctx.createRadialGradient(0, 11, 1, 0, 11, 16);
-    shadow.addColorStop(0, 'rgba(90, 70, 100, .2)');
-    shadow.addColorStop(1, 'rgba(90, 70, 100, 0)');
-    ctx.fillStyle = shadow;
-    ctx.beginPath();
-    ctx.ellipse(0, 11, 15, 4.2, 0, 0, Math.PI * 2);
-    ctx.fill();
-
-    if (activity === 'sleep' || activity === 'loaf') {
-      this._drawSleepingCat(ctx, appearance, phase, activity === 'loaf');
-    } else if (activity === 'roll') {
-      ctx.rotate(Math.sin(phase * 1.4) * 0.55);
-      this._drawSleepingCat(ctx, appearance, phase, false);
-    } else {
-      this._drawActiveCat(ctx, appearance, activity, phase);
+    switch (hex.building) {
+      case 'food_bowl': {
+        add(M(new THREE.CylinderGeometry(0.34, 0.26, 0.14, 8), 0xe8a878), 0, 0.07, 0);
+        add(M(new THREE.CylinderGeometry(0.26, 0.26, 0.05, 8), 0xa87858), 0, 0.15, 0);
+        for (let i = 0; i < 5; i++) {
+          add(M(new THREE.IcosahedronGeometry(0.045, 0), 0xd09860),
+            Math.cos(i * 2.4) * 0.13, 0.19, Math.sin(i * 2.4) * 0.13);
+        }
+        break;
+      }
+      case 'water_fountain': {
+        add(M(new THREE.CylinderGeometry(0.38, 0.32, 0.16, 8), 0x8cb5bd), 0, 0.08, 0);
+        add(M(new THREE.CylinderGeometry(0.3, 0.3, 0.04, 8), 0x9adcf0), 0, 0.17, 0);
+        add(M(new THREE.CylinderGeometry(0.06, 0.08, 0.42, 6), 0x7898a8), 0, 0.35, 0);
+        add(M(new THREE.CylinderGeometry(0.14, 0.1, 0.08, 6), 0x8cb5bd), 0, 0.58, 0);
+        break;
+      }
+      case 'bed':
+      case 'double_bed': {
+        const wide = hex.building === 'double_bed' ? 0.85 : 0.6;
+        add(M(new THREE.BoxGeometry(wide, 0.12, 0.5), 0xb898c0), 0, 0.06, 0);
+        const cushion = add(M(new THREE.CylinderGeometry(0.26, 0.28, 0.12, 8), 0xf0c8d4), 0, 0.15, 0);
+        cushion.scale.x = wide / 0.56;
+        break;
+      }
+      case 'scratcher': {
+        add(M(new THREE.CylinderGeometry(0.3, 0.34, 0.1, 8), 0xc9a06a), 0, 0.05, 0);
+        add(M(new THREE.CylinderGeometry(0.08, 0.08, 0.75, 6), 0xd0a878), 0, 0.47, 0);
+        add(M(new THREE.CylinderGeometry(0.24, 0.24, 0.08, 8), 0xe0b8c8), 0, 0.88, 0);
+        break;
+      }
+      case 'toy_ball': {
+        add(M(new THREE.IcosahedronGeometry(0.2, 0), 0xf08080), 0, 0.2, 0);
+        break;
+      }
+      case 'litter_box': {
+        add(M(new THREE.BoxGeometry(0.62, 0.2, 0.5), 0xb0b8c0), 0, 0.1, 0);
+        add(M(new THREE.BoxGeometry(0.5, 0.06, 0.38), 0xe0d0a8), 0, 0.2, 0);
+        break;
+      }
+      case 'lamp': {
+        add(M(new THREE.CylinderGeometry(0.16, 0.2, 0.08, 6), 0x8a7890), 0, 0.04, 0);
+        add(M(new THREE.CylinderGeometry(0.04, 0.05, 0.7, 6), 0x8a7890), 0, 0.43, 0);
+        const shade = new THREE.Mesh(
+          new THREE.ConeGeometry(0.26, 0.3, 6),
+          this._mat(0xf8dc90, { emissive: 0xf8d070, emissiveIntensity: 0.5 + level * 0.15 }),
+        );
+        add(shade, 0, 0.88, 0);
+        break;
+      }
+      case 'catnip_plant': {
+        add(M(new THREE.CylinderGeometry(0.18, 0.13, 0.22, 6), 0xc08868), 0, 0.11, 0);
+        const leaves = 3 + level;
+        for (let i = 0; i < leaves; i++) {
+          const a = (i / leaves) * Math.PI * 2;
+          const leaf = add(M(new THREE.ConeGeometry(0.09, 0.3, 4), i % 2 ? 0x78c078 : 0x9ad088),
+            Math.cos(a) * 0.12, 0.36, Math.sin(a) * 0.12);
+          leaf.rotation.z = Math.cos(a) * 0.5;
+          leaf.rotation.x = -Math.sin(a) * 0.5;
+        }
+        break;
+      }
+      case 'garden': {
+        add(M(new THREE.CylinderGeometry(0.44, 0.48, 0.1, 8), 0x88c878), 0, 0.05, 0);
+        const colors = [0xf2a3ac, 0xf4ce75, 0xbca1db, 0xf8f0e0];
+        const count = 4 + level * 2;
+        for (let i = 0; i < count; i++) {
+          const a = i * 2.4;
+          const radius = 0.1 + (i % 3) * 0.12;
+          add(M(new THREE.IcosahedronGeometry(0.06, 0), colors[i % colors.length]),
+            Math.cos(a) * radius, 0.16, Math.sin(a) * radius);
+        }
+        break;
+      }
+      case 'shelter': {
+        add(M(new THREE.BoxGeometry(0.72, 0.5, 0.62), 0xc98868), 0, 0.25, 0);
+        const roof = add(M(new THREE.ConeGeometry(0.62, 0.4, 4), 0xd89078), 0, 0.68, 0);
+        roof.rotation.y = Math.PI / 4;
+        add(M(new THREE.CylinderGeometry(0.14, 0.14, 0.06, 8), 0x6a4a48), 0, 0.26, 0.32);
+        break;
+      }
+      case 'tree': {
+        add(M(new THREE.CylinderGeometry(0.09, 0.13, 0.6, 6), 0xa87858), 0, 0.3, 0);
+        add(M(new THREE.IcosahedronGeometry(0.42, 0), 0x78b478), 0, 0.85, 0);
+        add(M(new THREE.IcosahedronGeometry(0.3, 0), 0x8cc484), 0.25, 0.62, 0.12);
+        add(M(new THREE.IcosahedronGeometry(0.26, 0), 0x6aa870), -0.24, 0.68, -0.1);
+        break;
+      }
+      default: {
+        add(M(new THREE.BoxGeometry(0.5, 0.4, 0.5), 0xb09878), 0, 0.2, 0);
+      }
     }
-    ctx.restore();
-
-    if (!moving) this._drawActivityBubble(ctx, cat, x, y, t, seed);
-    this._drawCatName(ctx, cat, x, y);
+    return g;
   }
 
-  _drawActiveCat(ctx, appearance, activity, phase) {
-    const walking = activity === 'walk';
-    const playing = activity === 'play' || activity === 'pounce';
-    const eating = activity === 'eat' || activity === 'drink';
-    const stretching = activity === 'stretch';
-    const yawning = activity === 'yawn';
-    const licking = activity === 'lick' || activity === 'groom';
-    const sitting = activity === 'warm' || activity === 'watch' || activity === 'ear_twitch' || activity === 'tail_flick';
-    const bounce = walking
-      ? Math.abs(Math.sin(phase)) * 2.2
-      : playing
-        ? Math.abs(Math.sin(phase * .9)) * 5
-        : stretching
-          ? Math.sin(phase * .5) * 1.2
-          : 0;
-    const stretchX = stretching ? 1.18 + Math.sin(phase * .6) * 0.08 : 1;
-    const bodyY = sitting ? 1 : licking ? 0 : -1 - bounce;
-    const headDip = eating ? 4 + Math.sin(phase * .45) * 1.2 : yawning ? -1 : licking ? 3 : 0;
+  /* ── Gato low-poly ── */
 
-    ctx.save();
-    if (stretching) ctx.scale(stretchX, 0.92);
+  _catMaterials(appearance) {
+    return {
+      coat: this._mat(new THREE.Color(appearance.coat).getHex()),
+      light: this._mat(new THREE.Color(appearance.light).getHex()),
+      dark: this._mat(new THREE.Color(appearance.dark).getHex()),
+      pink: this._mat(0xe89098),
+      eye: this._mat(0x3a3040, { roughness: 0.4 }),
+    };
+  }
 
-    // Tail — soft rounded stroke with flick gesture
-    const flick = activity === 'tail_flick' ? Math.sin(phase * 4) * 7 : Math.sin(phase * .6) * 3;
-    ctx.strokeStyle = appearance.coat;
-    ctx.lineWidth = 5;
-    ctx.lineCap = 'round';
-    ctx.beginPath();
-    ctx.moveTo(-8, bodyY);
-    if (sitting) {
-      ctx.bezierCurveTo(-16, -6 + flick * .2, -18 + flick * .3, 2, -12 + flick * .15, 6);
-    } else {
-      ctx.bezierCurveTo(-16, bodyY - 6, -20 + flick * .2, bodyY + 2, -14 + flick, bodyY + 5);
+  _buildCat(cat) {
+    const appearance = cat.appearance || {
+      coat: '#f0c4a0', dark: '#d49a72', light: '#fff0dc', eyes: '#8ecf7a',
+    };
+    const mats = this._catMaterials(appearance);
+    const root = new THREE.Group();
+    const body = new THREE.Group();
+    root.add(body);
+
+    const torso = new THREE.Mesh(new THREE.IcosahedronGeometry(0.34, 0), mats.coat);
+    torso.scale.set(1.5, 0.95, 1.0);
+    torso.position.y = 0.46;
+    torso.castShadow = true;
+    body.add(torso);
+
+    const rump = new THREE.Mesh(new THREE.IcosahedronGeometry(0.28, 0), mats.coat);
+    rump.position.set(-0.32, 0.48, 0);
+    rump.castShadow = true;
+    body.add(rump);
+
+    // Cabeza
+    const headG = new THREE.Group();
+    headG.position.set(0.46, 0.74, 0);
+    body.add(headG);
+
+    const head = new THREE.Mesh(new THREE.IcosahedronGeometry(0.22, 0), mats.coat);
+    head.scale.set(1.0, 0.95, 0.92);
+    head.castShadow = true;
+    headG.add(head);
+
+    const muzzle = new THREE.Mesh(new THREE.BoxGeometry(0.14, 0.1, 0.16), mats.light);
+    muzzle.position.set(0.17, -0.06, 0);
+    headG.add(muzzle);
+
+    const nose = new THREE.Mesh(new THREE.BoxGeometry(0.045, 0.04, 0.05), mats.pink);
+    nose.position.set(0.245, -0.03, 0);
+    headG.add(nose);
+
+    const mouth = new THREE.Mesh(new THREE.BoxGeometry(0.06, 0.09, 0.08), mats.eye);
+    mouth.position.set(0.19, -0.15, 0);
+    mouth.visible = false;
+    headG.add(mouth);
+
+    const earGeo = new THREE.ConeGeometry(0.095, 0.22, 4);
+    const ears = [0.12, -0.12].map((z) => {
+      const ear = new THREE.Mesh(earGeo, mats.coat);
+      ear.position.set(-0.02, 0.22, z);
+      ear.rotation.x = z > 0 ? 0.18 : -0.18;
+      ear.castShadow = true;
+      headG.add(ear);
+      return ear;
+    });
+
+    const eyeGeo = new THREE.IcosahedronGeometry(0.035, 0);
+    const eyeMat = this._mat(new THREE.Color(appearance.eyes || '#8ecf7a').getHex(), { roughness: 0.35 });
+    const eyes = [0.1, -0.1].map((z) => {
+      const eyeG = new THREE.Group();
+      eyeG.position.set(0.17, 0.05, z);
+      const ball = new THREE.Mesh(eyeGeo, eyeMat);
+      const pupil = new THREE.Mesh(new THREE.IcosahedronGeometry(0.018, 0), mats.eye);
+      pupil.position.x = 0.024;
+      eyeG.add(ball, pupil);
+      headG.add(eyeG);
+      return eyeG;
+    });
+
+    // Patas: pivote en la cadera, punta blanca como la referencia
+    const legGeo = new THREE.BoxGeometry(0.1, 0.3, 0.1);
+    const pawGeo = new THREE.BoxGeometry(0.12, 0.1, 0.11);
+    const legs = [
+      [0.32, 0.16], [0.32, -0.16], [-0.34, 0.16], [-0.34, -0.16],
+    ].map(([x, z]) => {
+      const legG = new THREE.Group();
+      legG.position.set(x, 0.4, z);
+      const leg = new THREE.Mesh(legGeo, mats.coat);
+      leg.position.y = -0.16;
+      leg.castShadow = true;
+      const paw = new THREE.Mesh(pawGeo, mats.light);
+      paw.position.set(0.015, -0.33, 0);
+      legG.add(leg, paw);
+      body.add(legG);
+      return legG;
+    });
+
+    // Cola: cadena articulada con punta blanca
+    const tail1 = new THREE.Group();
+    tail1.position.set(-0.55, 0.6, 0);
+    body.add(tail1);
+    const t1 = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.065, 0.34, 5), mats.coat);
+    t1.position.y = 0.16;
+    t1.castShadow = true;
+    tail1.add(t1);
+    const tail2 = new THREE.Group();
+    tail2.position.y = 0.33;
+    tail1.add(tail2);
+    const t2 = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.05, 0.3, 5), mats.coat);
+    t2.position.y = 0.14;
+    t2.castShadow = true;
+    tail2.add(t2);
+    const tip = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.04, 0.16, 5), mats.light);
+    tip.position.y = 0.36;
+    tail2.add(tip);
+
+    // Etiqueta con nombre y burbuja de actividad
+    const nameSprite = this._makeTextSprite(cat.name, {
+      bg: 'rgba(255,248,240,.94)', fg: '#7a5a68', size: 44,
+    });
+    nameSprite.position.set(0, 1.45, 0);
+    root.add(nameSprite);
+
+    const bubble = new THREE.Group();
+    bubble.position.set(0.35, 1.85, 0);
+    root.add(bubble);
+
+    root.scale.setScalar(0.82);
+    root.userData = {
+      body, headG, ears, eyes, mouth, legs, tail1, tail2,
+      nameSprite, bubble, bubbleIcon: null, name: cat.name,
+      anim: { x: 0, z: 0, angle: 0, moving: false, init: false },
+    };
+    return root;
+  }
+
+  _syncCats(cats, hexes) {
+    const alive = new Set();
+    cats.forEach((cat) => {
+      alive.add(cat.id);
+      if (!this._catObjects.has(cat.id)) {
+        const obj = this._buildCat(cat);
+        this._catObjects.set(cat.id, obj);
+        this.catsGroup.add(obj);
+      }
+    });
+    this._catObjects.forEach((obj, id) => {
+      if (!alive.has(id)) {
+        this.catsGroup.remove(obj);
+        this._disposeObject(obj);
+        this._catObjects.delete(id);
+      }
+    });
+  }
+
+  _updateCat(cat, hexes, delta, t) {
+    const obj = this._catObjects.get(cat.id);
+    if (!obj || !hexes.has(cat.hexKey)) {
+      if (obj) obj.visible = false;
+      return;
     }
-    ctx.stroke();
-    ctx.strokeStyle = this._lighten(appearance.coat, .12);
-    ctx.lineWidth = 2;
-    ctx.stroke();
+    obj.visible = true;
+    const ud = obj.userData;
+    const hex = hexes.get(cat.hexKey);
+    const dest = axialToPixel(hex.q, hex.r);
+    const dx3 = W(dest.x);
+    const dz3 = W(dest.y);
 
-    // Tiny paws
-    if (!sitting || licking) {
-      const legSwing = walking ? Math.sin(phase) * 3.2 : activity === 'litter' ? Math.sin(phase * 1.7) * 2.5 : playing ? Math.sin(phase) * 4 : 0;
-      const pawY = licking ? 6 + Math.abs(Math.sin(phase * 2)) * 2 : 7;
-      ctx.fillStyle = appearance.dark;
-      ctx.beginPath();
-      ctx.ellipse(-5 + legSwing * .4, pawY, 2.8, 2, 0, 0, Math.PI * 2);
-      ctx.ellipse(5 - legSwing * .4, pawY, 2.8, 2, 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = appearance.light;
-      ctx.beginPath();
-      ctx.ellipse(-5 + legSwing * .4, pawY + .2, 1.6, 1, 0, 0, Math.PI * 2);
-      ctx.ellipse(5 - legSwing * .4, pawY + .2, 1.6, 1, 0, 0, Math.PI * 2);
-      ctx.fill();
+    const anim = ud.anim;
+    if (!anim.init) {
+      anim.x = dx3;
+      anim.z = dz3;
+      anim.init = true;
+    }
+    const ddx = dx3 - anim.x;
+    const ddz = dz3 - anim.z;
+    const distance = Math.hypot(ddx, ddz);
+    anim.moving = distance > 0.04;
+    if (anim.moving) {
+      const step = Math.min(distance, 1.9 * delta);
+      anim.x += (ddx / distance) * step;
+      anim.z += (ddz / distance) * step;
+      const targetAngle = Math.atan2(-ddz, ddx);
+      let diff = targetAngle - anim.angle;
+      while (diff > Math.PI) diff -= Math.PI * 2;
+      while (diff < -Math.PI) diff += Math.PI * 2;
+      anim.angle += diff * Math.min(1, delta * 8);
+    } else {
+      anim.x = dx3;
+      anim.z = dz3;
+    }
+    obj.position.set(anim.x, 0, anim.z);
+    obj.rotation.y = anim.angle;
 
-      // Raised paw while licking
-      if (licking) {
-        const pawLift = 2 + Math.sin(phase * 3) * 2;
-        ctx.fillStyle = appearance.coat;
-        ctx.beginPath();
-        ctx.ellipse(6, bodyY - 2 - pawLift, 2.4, 2.8, .4, 0, Math.PI * 2);
-        ctx.fill();
+    const seed = cat.id.charCodeAt(cat.id.length - 1);
+    const activity = anim.moving ? 'walk' : (cat.activity || 'explore');
+    const phase = t * (anim.moving ? 8 : 2.2) + seed;
+    this._poseCat(ud, activity, phase, t, seed);
+
+    // Nombre actualizado (renombres) y burbuja de actividad
+    if (ud.name !== cat.name) {
+      ud.name = cat.name;
+      obj.remove(ud.nameSprite);
+      ud.nameSprite = this._makeTextSprite(cat.name, {
+        bg: 'rgba(255,248,240,.94)', fg: '#7a5a68', size: 44,
+      });
+      ud.nameSprite.position.set(0, 1.45, 0);
+      obj.add(ud.nameSprite);
+    }
+    const icon = anim.moving ? '' : (ACTIVITY_ICONS[cat.activity] || '');
+    if (icon !== ud.bubbleIcon) {
+      ud.bubbleIcon = icon;
+      ud.bubble.clear();
+      if (icon) {
+        const sprite = this._makeTextSprite(icon, {
+          bg: 'rgba(255,252,246,.95)', fg: '#7a5a70', size: 52, round: true,
+        });
+        ud.bubble.add(sprite);
+      }
+    }
+    ud.bubble.position.y = 1.85 + Math.sin(t * 2 + seed) * 0.04;
+    // Las etiquetas no giran con el gato
+    ud.nameSprite.rotation.y = -obj.rotation.y;
+  }
+
+  _poseCat(ud, activity, phase, t, seed) {
+    const { body, headG, ears, eyes, mouth, legs, tail1, tail2 } = ud;
+
+    // Base
+    body.position.set(0, 0, 0);
+    body.rotation.set(0, 0, 0);
+    body.scale.set(1, 1, 1);
+    headG.position.set(0.46, 0.74, 0);
+    headG.rotation.set(0, 0, 0);
+    legs.forEach((leg) => {
+      leg.rotation.set(0, 0, 0);
+      leg.scale.set(1, 1, 1);
+    });
+    tail1.rotation.set(0, 0, 0.55);
+    tail2.rotation.set(0, 0, -0.5);
+    eyes.forEach((eye) => eye.scale.set(1, 1, 1));
+    ears.forEach((ear, i) => { ear.rotation.z = 0; ear.rotation.x = i === 0 ? 0.18 : -0.18; });
+    mouth.visible = false;
+
+    const swing = Math.sin(phase);
+    switch (activity) {
+      case 'walk': {
+        body.position.y = Math.abs(swing) * 0.05;
+        legs[0].rotation.z = swing * 0.55;
+        legs[3].rotation.z = swing * 0.55;
+        legs[1].rotation.z = -swing * 0.55;
+        legs[2].rotation.z = -swing * 0.55;
+        tail1.rotation.z = 0.75;
+        tail1.rotation.x = Math.sin(phase * 0.7) * 0.25;
+        headG.rotation.z = Math.abs(swing) * 0.04;
+        break;
+      }
+      case 'sleep': {
+        const breathe = Math.sin(phase) * 0.02;
+        body.position.y = -0.26;
+        body.scale.set(1.05 + breathe, 0.72 - breathe, 1.12);
+        legs.forEach((leg) => { leg.scale.y = 0.25; });
+        headG.position.set(0.4, 0.5, 0.05);
+        headG.rotation.z = -0.35;
+        eyes.forEach((eye) => eye.scale.set(1, 0.12, 1));
+        tail1.rotation.set(0.9, 0, 1.4);
+        tail2.rotation.set(0.7, 0, -0.4);
+        break;
+      }
+      case 'loaf': {
+        body.position.y = -0.24;
+        body.scale.set(1.02, 0.78, 1.1);
+        legs.forEach((leg) => { leg.scale.y = 0.22; });
+        headG.position.set(0.44, 0.66, 0);
+        tail1.rotation.set(1.1, 0, 1.3);
+        tail2.rotation.set(0.6, 0, -0.3);
+        break;
+      }
+      case 'roll': {
+        body.rotation.x = Math.sin(phase * 1.2) * 1.1;
+        body.position.y = 0.08;
+        legs.forEach((leg, i) => { leg.rotation.z = Math.sin(phase * 2 + i) * 0.4; });
+        tail1.rotation.z = 0.9;
+        break;
+      }
+      case 'stretch': {
+        body.scale.x = 1.14 + Math.sin(phase * 0.5) * 0.03;
+        body.rotation.z = -0.16;
+        body.position.y = 0.05;
+        legs[0].rotation.z = 0.8;
+        legs[1].rotation.z = 0.8;
+        headG.rotation.z = 0.3;
+        tail1.rotation.z = 1.0;
+        break;
+      }
+      case 'yawn': {
+        headG.rotation.z = 0.32;
+        mouth.visible = true;
+        mouth.scale.y = 0.6 + Math.abs(Math.sin(phase)) * 0.8;
+        eyes.forEach((eye) => eye.scale.set(1, 0.15, 1));
+        tail1.rotation.z = 0.62;
+        break;
+      }
+      case 'lick':
+      case 'groom': {
+        headG.rotation.y = 0.55;
+        headG.rotation.z = -0.18;
+        legs[0].rotation.z = 1.15 + Math.sin(phase * 2.4) * 0.18;
+        if (Math.sin(phase) > 0) eyes.forEach((eye) => eye.scale.set(1, 0.15, 1));
+        break;
+      }
+      case 'play':
+      case 'pounce': {
+        const hop = Math.abs(Math.sin(phase * 0.9));
+        body.position.y = hop * 0.22;
+        body.rotation.z = -hop * 0.12;
+        legs[0].rotation.z = hop * 0.9;
+        legs[1].rotation.z = hop * 0.9;
+        tail1.rotation.z = 0.9;
+        tail1.rotation.x = Math.sin(phase * 2) * 0.35;
+        break;
+      }
+      case 'eat':
+      case 'drink': {
+        headG.rotation.z = -0.55 + Math.sin(phase * 0.45) * 0.06;
+        headG.position.y = 0.6;
+        eyes.forEach((eye) => eye.scale.set(1, 0.4, 1));
+        break;
+      }
+      case 'litter': {
+        body.position.y = -0.06;
+        legs[2].rotation.z = Math.sin(phase * 1.7) * 0.3;
+        legs[3].rotation.z = -Math.sin(phase * 1.7) * 0.3;
+        break;
+      }
+      case 'warm':
+      case 'watch': {
+        // Sentado: pecho arriba, patas traseras plegadas
+        body.rotation.z = 0.35;
+        body.position.y = -0.08;
+        legs[0].rotation.z = -0.35;
+        legs[1].rotation.z = -0.35;
+        legs[2].scale.y = 0.4;
+        legs[3].scale.y = 0.4;
+        headG.rotation.z = -0.3;
+        headG.rotation.y = Math.sin(t * 0.6 + seed) * 0.3;
+        tail1.rotation.set(0.8, 0, 1.2);
+        break;
+      }
+      case 'ear_twitch': {
+        ears[0].rotation.z = Math.sin(phase * 5) > 0 ? 0.35 : 0;
+        ears[1].rotation.z = Math.sin(phase * 5 + 1) > 0 ? -0.3 : 0;
+        headG.rotation.y = Math.sin(phase * 0.8) * 0.2;
+        break;
+      }
+      case 'tail_flick': {
+        tail1.rotation.x = Math.sin(phase * 4) * 0.5;
+        tail2.rotation.x = Math.sin(phase * 4 + 0.6) * 0.45;
+        break;
+      }
+      default: {
+        // explore de pie: cola y cabeza con vida
+        headG.rotation.y = Math.sin(t * 0.7 + seed) * 0.35;
+        tail1.rotation.x = Math.sin(phase * 0.6) * 0.18;
+        tail2.rotation.x = Math.sin(phase * 0.6 + 0.5) * 0.15;
       }
     }
 
-    // Soft body blob with gradient (kawaii chibi)
-    const bodyGrad = ctx.createRadialGradient(-2, bodyY - 3, 1, 0, bodyY, 12);
-    bodyGrad.addColorStop(0, this._lighten(appearance.coat, .16));
-    bodyGrad.addColorStop(1, appearance.coat);
-    ctx.fillStyle = bodyGrad;
-    ctx.beginPath();
-    const bodyW = stretching ? 13 : sitting ? 9 : 11;
-    const bodyH = stretching ? 6.2 : sitting ? 9 : 7.5;
-    ctx.ellipse(sitting ? -1 : 0, bodyY, bodyW, bodyH, -.05, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = appearance.dark;
-    ctx.lineWidth = 1.4;
-    ctx.lineJoin = 'round';
-    ctx.stroke();
-
-    this._drawCoatPattern(ctx, appearance, bodyY, sitting);
-
-    // Big kawaii head
-    const headX = sitting ? 1 : stretching ? 10 : 7;
-    const headY = (sitting ? -10 : stretching ? -5 - bounce : -8 - bounce) + headDip;
-    const earTwitch = activity === 'ear_twitch' ? Math.sin(phase * 5) * 2.5 : 0;
-
-    const headGrad = ctx.createRadialGradient(headX - 2, headY - 3, 1, headX, headY, 10);
-    headGrad.addColorStop(0, this._lighten(appearance.coat, .2));
-    headGrad.addColorStop(1, appearance.coat);
-    ctx.fillStyle = headGrad;
-    ctx.beginPath();
-    ctx.arc(headX, headY, 9.2, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = appearance.dark;
-    ctx.lineWidth = 1.4;
-    ctx.stroke();
-
-    // Soft rounded ears
-    this._drawKawaiiEar(ctx, appearance, headX - 6.5, headY - 6 + earTwitch, -1);
-    this._drawKawaiiEar(ctx, appearance, headX + 6.5, headY - 6 - earTwitch * .6, 1);
-
-    this._drawCatFace(ctx, appearance, headX, headY, eating || licking, licking, phase, yawning);
-    ctx.restore();
+    // Parpadeo
+    if (activity !== 'sleep' && activity !== 'yawn' && ((t * 0.9 + seed) % 4.2) < 0.12) {
+      eyes.forEach((eye) => eye.scale.set(1, 0.1, 1));
+    }
   }
 
-  _drawKawaiiEar(ctx, appearance, x, y, side) {
-    ctx.fillStyle = appearance.coat;
-    ctx.strokeStyle = appearance.dark;
-    ctx.lineWidth = 1.3;
-    ctx.beginPath();
-    ctx.moveTo(x - side * 2.5, y + 2);
-    ctx.quadraticCurveTo(x - side * 1.5, y - 9, x + side * 4, y - 1);
-    ctx.quadraticCurveTo(x + side * .5, y + 1, x - side * 2.5, y + 2);
-    ctx.fill();
-    ctx.stroke();
-    ctx.fillStyle = appearance.blush || '#f5a8b0';
-    ctx.globalAlpha = .55;
-    ctx.beginPath();
-    ctx.ellipse(x + side * .4, y - 2.5, 1.8, 2.4, side * .2, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.globalAlpha = 1;
+  /* ── Sprites de texto (nombres, burbujas, insignias) ── */
+
+  _makeTextSprite(text, { bg, fg, size = 44, round = false }) {
+    const key = `${text}|${bg}|${fg}|${size}|${round}`;
+    let tex = this._spriteTexCache.get(key);
+    if (!tex) {
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      ctx.font = `800 ${size}px Nunito, sans-serif`;
+      const w = round ? size * 1.9 : Math.ceil(ctx.measureText(text).width) + size * 1.1;
+      const h = size * 1.9;
+      canvas.width = w;
+      canvas.height = h;
+      ctx.font = `800 ${size}px Nunito, sans-serif`;
+      ctx.fillStyle = bg;
+      ctx.beginPath();
+      if (round) {
+        ctx.arc(w / 2, h / 2, h / 2 - 4, 0, Math.PI * 2);
+      } else {
+        ctx.roundRect(2, h * 0.14, w - 4, h * 0.72, h * 0.36);
+      }
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(200,160,180,.5)';
+      ctx.lineWidth = 3;
+      ctx.stroke();
+      ctx.fillStyle = fg;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(text, w / 2, h / 2 + 2);
+      tex = new THREE.CanvasTexture(canvas);
+      tex.userData = { aspect: w / h };
+      this._spriteTexCache.set(key, tex);
+    }
+    const mat = new THREE.SpriteMaterial({ map: tex, depthTest: false });
+    const sprite = new THREE.Sprite(mat);
+    const height = round ? 0.34 : 0.3;
+    sprite.scale.set(height * tex.userData.aspect, height, 1);
+    sprite.renderOrder = 10;
+    return sprite;
   }
 
-  _drawSleepingCat(ctx, appearance, phase, loaf = false) {
-    const breathe = Math.sin(phase) * .4;
+  /* ── Limpieza ── */
 
-    const bodyGrad = ctx.createRadialGradient(-2, -2, 1, 0, 0, 14);
-    bodyGrad.addColorStop(0, this._lighten(appearance.coat, .14));
-    bodyGrad.addColorStop(1, appearance.coat);
-    ctx.fillStyle = bodyGrad;
-    ctx.strokeStyle = appearance.dark;
-    ctx.lineWidth = 1.4;
-    ctx.beginPath();
-    if (loaf) {
-      ctx.ellipse(0, 2, 12 + breathe * .5, 9.5 + breathe, 0, 0, Math.PI * 2);
+  _disposeGroup(group) {
+    [...group.children].forEach((child) => {
+      group.remove(child);
+      this._disposeObject(child);
+    });
+  }
+
+  _disposeObject(obj) {
+    obj.traverse((node) => {
+      if (node.geometry) node.geometry.dispose();
+      if (node.material?.map && node.isSprite) node.material.dispose();
+    });
+  }
+
+  /* ── Bucle principal ── */
+
+  draw(state, hexes, cats) {
+    const now = performance.now();
+    const delta = Math.min(0.05, (now - (this._lastDraw || now)) / 1000);
+    this._lastDraw = now;
+    const t = now / 1000;
+
+    this._syncTiles(hexes);
+    this._syncGhosts(hexes);
+    this._syncCats(cats, hexes);
+
+    cats.forEach((cat) => this._updateCat(cat, hexes, delta, t));
+
+    // Resaltado de casilla
+    if (this.highlightKey && hexes.has(this.highlightKey)) {
+      const hex = hexes.get(this.highlightKey);
+      const p = axialToPixel(hex.q, hex.r);
+      this._highlightMesh.position.set(W(p.x), 0.03, W(p.y));
+      this._highlightMesh.visible = true;
     } else {
-      ctx.ellipse(0, 1, 13 + breathe, 8.5 + breathe, -.12, 0, Math.PI * 2);
-    }
-    ctx.fill();
-    ctx.stroke();
-
-    // Curled soft tail
-    if (!loaf) {
-      ctx.strokeStyle = appearance.coat;
-      ctx.lineWidth = 5;
-      ctx.lineCap = 'round';
-      ctx.beginPath();
-      ctx.arc(-2, 1, 11, -.15, Math.PI * 1.15);
-      ctx.stroke();
+      this._highlightMesh.visible = false;
     }
 
-    // Head
-    const headGrad = ctx.createRadialGradient(7, -4, 1, 8, -2, 8);
-    headGrad.addColorStop(0, this._lighten(appearance.coat, .18));
-    headGrad.addColorStop(1, appearance.coat);
-    ctx.fillStyle = headGrad;
-    ctx.beginPath();
-    ctx.arc(loaf ? 2 : 8, loaf ? -4 : -2, loaf ? 8.5 : 8, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.strokeStyle = appearance.dark;
-    ctx.lineWidth = 1.3;
-    ctx.stroke();
-
-    const hx = loaf ? 2 : 8;
-    const hy = loaf ? -4 : -2;
-    this._drawKawaiiEar(ctx, appearance, hx - 4, hy - 5, -1);
-    this._drawKawaiiEar(ctx, appearance, hx + 5, hy - 4, 1);
-
-    // Closed sleepy eyes
-    ctx.strokeStyle = appearance.dark;
-    ctx.lineWidth = 1.2;
-    ctx.lineCap = 'round';
-    ctx.beginPath();
-    ctx.arc(hx - 2.5, hy, 1.6, .25, Math.PI - .25);
-    ctx.arc(hx + 2.5, hy, 1.6, .25, Math.PI - .25);
-    ctx.stroke();
-
-    // Soft blush
-    ctx.fillStyle = appearance.blush || '#f5a8b0';
-    ctx.globalAlpha = .45;
-    ctx.beginPath();
-    ctx.ellipse(hx - 4, hy + 2, 2.2, 1.3, 0, 0, Math.PI * 2);
-    ctx.ellipse(hx + 4, hy + 2, 2.2, 1.3, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.globalAlpha = 1;
-
-    // Tiny nose
-    ctx.fillStyle = '#e89098';
-    ctx.beginPath();
-    ctx.ellipse(hx, hy + 2.5, 1.2, .8, 0, 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  _drawCoatPattern(ctx, appearance, bodyY, sitting) {
-    ctx.save();
-    ctx.strokeStyle = appearance.dark;
-    ctx.fillStyle = appearance.light;
-    ctx.globalAlpha = .55;
-    if (appearance.pattern === 'tabby') {
-      ctx.lineWidth = 1.6;
-      ctx.lineCap = 'round';
-      [-4, 0, 4].forEach((offset) => {
-        ctx.beginPath();
-        ctx.moveTo(offset - 1.5, bodyY - 4);
-        ctx.quadraticCurveTo(offset, bodyY - 1, offset + .5, bodyY + 2);
-        ctx.stroke();
-      });
-    } else if (appearance.pattern === 'patches') {
-      ctx.beginPath();
-      ctx.ellipse(-3, bodyY - 1, 4.5, 3.5, .35, 0, Math.PI * 2);
-      ctx.fill();
-    } else if (appearance.pattern === 'tuxedo') {
-      ctx.beginPath();
-      ctx.ellipse(sitting ? 0 : 3, bodyY + 2, 3.5, 3, 0, 0, Math.PI * 2);
-      ctx.fill();
-    } else if (appearance.pattern === 'points') {
-      ctx.fillStyle = appearance.dark;
-      ctx.globalAlpha = .35;
-      ctx.beginPath();
-      ctx.ellipse(-7, bodyY + 1, 3.5, 4, 0, 0, Math.PI * 2);
-      ctx.fill();
-    }
-    ctx.restore();
-  }
-
-  _drawCatFace(ctx, appearance, x, y, lookingDown, grooming, phase, yawning = false) {
-    // Soft blush cheeks
-    ctx.fillStyle = appearance.blush || '#f5a8b0';
-    ctx.globalAlpha = .5;
-    ctx.beginPath();
-    ctx.ellipse(x - 5.5, y + 2.2, 2.4, 1.5, 0, 0, Math.PI * 2);
-    ctx.ellipse(x + 5.5, y + 2.2, 2.4, 1.5, 0, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.globalAlpha = 1;
-
-    const eyeY = y - .5;
-    if (yawning) {
-      // Closed happy eyes + open mouth
-      ctx.strokeStyle = appearance.dark;
-      ctx.lineWidth = 1.3;
-      ctx.lineCap = 'round';
-      ctx.beginPath();
-      ctx.arc(x - 3, eyeY, 1.8, .2, Math.PI - .2);
-      ctx.arc(x + 3, eyeY, 1.8, .2, Math.PI - .2);
-      ctx.stroke();
-      ctx.fillStyle = '#5a4050';
-      ctx.beginPath();
-      ctx.ellipse(x, y + 4.5, 2.4, 2.8 + Math.abs(Math.sin(phase)) * 1.2, 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = '#e89098';
-      ctx.beginPath();
-      ctx.ellipse(x, y + 5.2, 1.2, 1.4, 0, 0, Math.PI * 2);
-      ctx.fill();
-      return;
+    // Pulso de casillas fantasma
+    if (this._ghostMat) {
+      this._ghostMat.opacity = 0.28 + Math.sin(t * 3.2) * 0.1;
     }
 
-    if (grooming && Math.sin(phase) > 0) {
-      ctx.strokeStyle = appearance.dark;
-      ctx.lineWidth = 1.2;
-      ctx.lineCap = 'round';
-      ctx.beginPath();
-      ctx.arc(x - 3, eyeY, 1.8, .2, Math.PI - .2);
-      ctx.arc(x + 3, eyeY, 1.8, .2, Math.PI - .2);
-      ctx.stroke();
-    } else {
-      // Big shiny kawaii eyes with soft gradient
-      const eyeH = lookingDown ? 1.4 : 3.2;
-      [
-        [x - 3, eyeY],
-        [x + 3, eyeY],
-      ].forEach(([ex, ey]) => {
-        const eyeGrad = ctx.createRadialGradient(ex - .5, ey - .8, .2, ex, ey, 2.8);
-        eyeGrad.addColorStop(0, this._lighten(appearance.eyes, .25));
-        eyeGrad.addColorStop(1, appearance.eyes);
-        ctx.fillStyle = eyeGrad;
-        ctx.beginPath();
-        ctx.ellipse(ex, ey, 2.4, eyeH, 0, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.fillStyle = '#3a3040';
-        ctx.beginPath();
-        ctx.ellipse(ex + .15, ey + .15, 1.1, eyeH * .55, 0, 0, Math.PI * 2);
-        ctx.fill();
-        // Soft highlight sparkles
-        ctx.fillStyle = 'rgba(255,255,255,.9)';
-        ctx.beginPath();
-        ctx.arc(ex - .7, ey - eyeH * .35, .7, 0, Math.PI * 2);
-        ctx.fill();
-        ctx.beginPath();
-        ctx.arc(ex + .6, ey + .2, .35, 0, Math.PI * 2);
-        ctx.fill();
-      });
-    }
+    // Nubes a la deriva
+    this.clouds.children.forEach((cloud) => {
+      cloud.position.x += cloud.userData.speed * delta;
+      if (cloud.position.x > 22) cloud.position.x = -22;
+    });
 
-    // Soft rounded nose
-    ctx.fillStyle = '#e89098';
-    ctx.beginPath();
-    ctx.moveTo(x - 1.3, y + 2.2);
-    ctx.quadraticCurveTo(x, y + 4, x + 1.3, y + 2.2);
-    ctx.quadraticCurveTo(x, y + 1.6, x - 1.3, y + 2.2);
-    ctx.fill();
-
-    // Soft whiskers
-    ctx.strokeStyle = 'rgba(120, 100, 110, .45)';
-    ctx.lineWidth = .7;
-    ctx.lineCap = 'round';
-    ctx.beginPath();
-    ctx.moveTo(x - 1.5, y + 3); ctx.lineTo(x - 8, y + 1.8);
-    ctx.moveTo(x - 1.5, y + 4); ctx.lineTo(x - 8, y + 4.5);
-    ctx.moveTo(x + 1.5, y + 3); ctx.lineTo(x + 8, y + 1.8);
-    ctx.moveTo(x + 1.5, y + 4); ctx.lineTo(x + 8, y + 4.5);
-    ctx.stroke();
-  }
-
-  _drawActivityBubble(ctx, cat, x, y, t, seed) {
-    const activityIcons = {
-      eat: '🍽', drink: '💧', sleep: 'z', play: '✦', litter: '◌',
-      warm: '☀', groom: '♥', watch: '…', explore: '',
-      stretch: '∿', yawn: '◡', lick: '👅', loaf: '▮',
-      ear_twitch: '♪', tail_flick: '~', pounce: '✧', roll: '↻',
-    };
-    const icon = activityIcons[cat.activity];
-    if (!icon) return;
-    const bubbleY = y - 36 + Math.sin(t * 2 + seed) * 1.2;
-    ctx.save();
-    // Soft layered bubble (flat depth)
-    ctx.fillStyle = 'rgba(90, 70, 100, .12)';
-    ctx.beginPath();
-    ctx.arc(x + 14, bubbleY + 1.5, 8.5, 0, Math.PI * 2);
-    ctx.fill();
-    const bubbleGrad = ctx.createRadialGradient(x + 12, bubbleY - 2, 1, x + 13, bubbleY, 8);
-    bubbleGrad.addColorStop(0, '#fffef8');
-    bubbleGrad.addColorStop(1, '#ffe8f0');
-    ctx.fillStyle = bubbleGrad;
-    ctx.strokeStyle = 'rgba(200, 160, 180, .45)';
-    ctx.lineWidth = 1.4;
-    ctx.beginPath();
-    ctx.arc(x + 13, bubbleY, 8, 0, Math.PI * 2);
-    ctx.fill();
-    ctx.stroke();
-    ctx.fillStyle = '#7a5a70';
-    ctx.font = `800 ${icon === 'z' ? 9 : 8}px Nunito, sans-serif`;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(icon, x + 13, bubbleY);
-    ctx.restore();
-  }
-
-  _drawCatName(ctx, cat, x, y) {
-    ctx.save();
-    ctx.font = `800 ${HEX_SIZE * 0.17}px Nunito, sans-serif`;
-    const width = ctx.measureText(cat.name).width + 12;
-    // Soft shadow layer
-    ctx.fillStyle = 'rgba(90, 70, 100, .18)';
-    ctx.beginPath();
-    ctx.roundRect(x - width / 2 + 1, y + 13, width, 13, 8);
-    ctx.fill();
-    const tagGrad = ctx.createLinearGradient(0, y + 12, 0, y + 25);
-    tagGrad.addColorStop(0, 'rgba(255, 248, 240, .92)');
-    tagGrad.addColorStop(1, 'rgba(255, 230, 235, .9)');
-    ctx.fillStyle = tagGrad;
-    ctx.beginPath();
-    ctx.roundRect(x - width / 2, y + 12, width, 13, 8);
-    ctx.fill();
-    ctx.strokeStyle = 'rgba(220, 180, 190, .5)';
-    ctx.lineWidth = 1;
-    ctx.stroke();
-    ctx.fillStyle = '#7a5a68';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'middle';
-    ctx.fillText(cat.name, x, y + 18.5);
-    ctx.restore();
-  }
-
-  _darken(hex, amount) {
-    const num = parseInt(hex.slice(1), 16);
-    const r = Math.max(0, (num >> 16) - Math.floor(255 * amount));
-    const g = Math.max(0, ((num >> 8) & 0xff) - Math.floor(255 * amount));
-    const b = Math.max(0, (num & 0xff) - Math.floor(255 * amount));
-    return `rgb(${r},${g},${b})`;
-  }
-
-  _lighten(hex, amount) {
-    const num = parseInt(hex.slice(1), 16);
-    const r = Math.min(255, (num >> 16) + Math.floor(255 * amount));
-    const g = Math.min(255, ((num >> 8) & 0xff) + Math.floor(255 * amount));
-    const b = Math.min(255, (num & 0xff) + Math.floor(255 * amount));
-    return `rgb(${r},${g},${b})`;
+    this._updateCamera();
+    this.renderer.render(this.scene, this.camera);
   }
 }
