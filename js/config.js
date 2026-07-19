@@ -5,9 +5,9 @@ export const DIFFICULTIES = {
     label: 'Fácil',
     croquetas: 120,
     catArrivalRate: 45000,
-    needDecay: 0.015,
+    needDecay: 0.022,
     incomeMultiplier: 1.3,
-    description: 'Más croquetas, gatos llegan despacio y necesidades bajan lento.',
+    description: 'Más croquetas, gatos llegan despacio y necesidades bajan con calma.',
   },
   normal: {
     id: 'normal',
@@ -15,9 +15,9 @@ export const DIFFICULTIES = {
     label: 'Normal',
     croquetas: 80,
     catArrivalRate: 35000,
-    needDecay: 0.025,
+    needDecay: 0.036,
     incomeMultiplier: 1.0,
-    description: 'Experiencia balanceada para aprender y crecer.',
+    description: 'Experiencia balanceada; las necesidades aparecen un poco antes.',
   },
   hard: {
     id: 'hard',
@@ -25,9 +25,9 @@ export const DIFFICULTIES = {
     label: 'Difícil',
     croquetas: 50,
     catArrivalRate: 25000,
-    needDecay: 0.04,
+    needDecay: 0.055,
     incomeMultiplier: 0.75,
-    description: 'Pocos recursos, gatos exigentes y llegadas frecuentes.',
+    description: 'Pocos recursos, gatos exigentes y necesidades que llegan pronto.',
   },
 };
 
@@ -74,7 +74,7 @@ export const BUILDINGS = {
     cost: 0,
     description: 'Expande el catio con una nueva casilla hexagonal. El precio sube levemente por cada casilla que ya tengas.',
     provides: {},
-    color: '#5a8a4a',
+    color: '#7ab870',
     height: 0.15,
   },
   food_bowl: {
@@ -85,7 +85,7 @@ export const BUILDINGS = {
     cost: 12,
     description: 'Plato de croquetas. Cubre la necesidad de alimento de 1 gato cercano.',
     provides: { food: 1 },
-    color: '#c87830',
+    color: '#e8a878',
     height: 0.25,
   },
   water_fountain: {
@@ -96,7 +96,7 @@ export const BUILDINGS = {
     cost: 18,
     description: 'Agua fresca constante. Mejora la salud de los gatos en casillas adyacentes.',
     provides: { health: 1 },
-    color: '#4a90c8',
+    color: '#7ab8d8',
     height: 0.35,
   },
   bed: {
@@ -108,7 +108,7 @@ export const BUILDINGS = {
     description: 'Cama acogedora para 1 gato. Aumenta el límite de gatos en +1.',
     provides: { sleep: 1 },
     catCapacity: 1,
-    color: '#8a6a9a',
+    color: '#c8a0c0',
     height: 0.3,
   },
   double_bed: {
@@ -120,7 +120,7 @@ export const BUILDINGS = {
     description: 'Cama amplia para 2 gatos que pueden dormir juntos. Aumenta el límite en +2.',
     provides: { sleep: 2 },
     catCapacity: 2,
-    color: '#7a5a8a',
+    color: '#b890b8',
     height: 0.35,
   },
   scratcher: {
@@ -131,7 +131,7 @@ export const BUILDINGS = {
     cost: 14,
     description: 'Poste rascador. Satisface la entretención y mantiene las uñas sanas.',
     provides: { fun: 1, health: 0.3 },
-    color: '#a07040',
+    color: '#d0a878',
     height: 0.55,
   },
   toy_ball: {
@@ -142,7 +142,7 @@ export const BUILDINGS = {
     cost: 8,
     description: 'Juguete simple. Entretención básica para gatos curiosos.',
     provides: { fun: 0.6 },
-    color: '#d04040',
+    color: '#f08080',
     height: 0.15,
   },
   litter_box: {
@@ -153,7 +153,7 @@ export const BUILDINGS = {
     cost: 16,
     description: 'Arenero limpio. Esencial para la higiene; sin areneros la felicidad cae rápido.',
     provides: { hygiene: 1 },
-    color: '#909090',
+    color: '#b0b8c0',
     height: 0.2,
   },
   lamp: {
@@ -164,7 +164,7 @@ export const BUILDINGS = {
     cost: 20,
     description: 'Calor suave para noches frías. Cubre temperatura en casillas cercanas.',
     provides: { warmth: 1 },
-    color: '#e8c040',
+    color: '#f0d070',
     height: 0.45,
     upgradeable: true,
     maxLevel: 3,
@@ -179,7 +179,7 @@ export const BUILDINGS = {
     cost: 22,
     description: 'Hierba gatera aromática. Entretención y felicidad extra en el área.',
     provides: { fun: 1.2 },
-    color: '#4a9a4a',
+    color: '#78c078',
     height: 0.35,
     upgradeable: true,
     maxLevel: 3,
@@ -194,7 +194,7 @@ export const BUILDINGS = {
     cost: 25,
     description: 'Pequeño jardín florido. Mejora entretención y temperatura del entorno.',
     provides: { fun: 0.5, warmth: 0.3 },
-    color: '#6aab5a',
+    color: '#88c878',
     height: 0.4,
     upgradeable: true,
     maxLevel: 3,
@@ -210,7 +210,7 @@ export const BUILDINGS = {
     description: 'Casa cubierta contra lluvia y viento. Protección térmica para varios gatos.',
     provides: { warmth: 1.5, sleep: 0.5 },
     catCapacity: 1,
-    color: '#8a5030',
+    color: '#d09070',
     height: 0.6,
   },
   tree: {
@@ -221,7 +221,7 @@ export const BUILDINGS = {
     cost: 20,
     description: 'Sombra natural y ambiente agradable. Refresca en días calurosos.',
     provides: { warmth: 0.5, fun: 0.3 },
-    color: '#3a7a3a',
+    color: '#68a868',
     height: 0.7,
   },
 };

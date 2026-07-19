@@ -725,7 +725,7 @@ button:focus-visible, input:focus-visible {
   position: absolute;
   inset: 0;
   pointer-events: none;
-  box-shadow: inset 0 0 80px rgba(26, 15, 34, .28);
+  box-shadow: inset 0 0 90px rgba(200, 170, 190, .22);
   z-index: 2;
 }
 .camera-hint {
