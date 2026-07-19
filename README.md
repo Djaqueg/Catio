@@ -46,9 +46,11 @@ js/
   hex.js       — grid hexagonal estilo Catan
   cats.js      — gatos, necesidades, economía
   save.js      — 3 slots en localStorage
-  renderer.js  — canvas 3D suave
+  renderer.js  — escena 3D low-poly (Three.js)
+  audio.js     — música ambiental y efectos (Web Audio)
   ui.js        — interfaz mobile-first
   main.js      — bucle de juego
+  vendor/      — Three.js vendorizado (funciona offline)
 ```
 
 ## Licencia
