@@ -28,13 +28,14 @@ export function isNameTaken(name, cats, excludeId = null) {
 
 export function createCat(name, hexKey) {
   const needs = {};
-  NEEDS.forEach((n) => { needs[n] = 80 + Math.random() * 20; });
+  NEEDS.forEach((n) => { needs[n] = 65 + Math.random() * 25; });
   const coats = [
-    { coat: '#d19a62', dark: '#8c5c38', light: '#f2d0a5', pattern: 'tabby', eyes: '#79a95b' },
-    { coat: '#ddd4c8', dark: '#766f70', light: '#fff8ed', pattern: 'patches', eyes: '#70a8ba' },
-    { coat: '#4d4850', dark: '#292630', light: '#a59ba5', pattern: 'solid', eyes: '#d6b64f' },
-    { coat: '#b97855', dark: '#674434', light: '#ead0b6', pattern: 'tuxedo', eyes: '#8caf58' },
-    { coat: '#c8b7a0', dark: '#695f5b', light: '#f1e6d7', pattern: 'points', eyes: '#69a7c7' },
+    { coat: '#f0c4a0', dark: '#d49a72', light: '#fff0dc', pattern: 'tabby', eyes: '#8ecf7a', blush: '#f5a8b0' },
+    { coat: '#f2ebe3', dark: '#c4b8b0', light: '#fffaf4', pattern: 'patches', eyes: '#7ec4d4', blush: '#f2b0b8' },
+    { coat: '#c8c0d0', dark: '#9a90a4', light: '#ebe4f0', pattern: 'solid', eyes: '#e8c86a', blush: '#e8a8b0' },
+    { coat: '#e8b898', dark: '#c88868', light: '#fce8d4', pattern: 'tuxedo', eyes: '#9ad070', blush: '#f0a8a8' },
+    { coat: '#e8d8c8', dark: '#b8a898', light: '#faf4ec', pattern: 'points', eyes: '#78b8d8', blush: '#f0b0b8' },
+    { coat: '#f0c8d0', dark: '#d898a8', light: '#fff0f4', pattern: 'solid', eyes: '#90c8e0', blush: '#f8a0b0' },
   ];
   const appearance = { ...coats[Math.floor(Math.random() * coats.length)] };
   return {

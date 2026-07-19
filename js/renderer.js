@@ -5,10 +5,10 @@ import {
 } from './hex.js';
 
 const COLORS = {
-  grass: ['#79ad72', '#83b87c', '#70a66e'],
-  grassDark: ['#426f52', '#507e5c', '#5b8a63'],
-  edge: '#426847',
-  shadow: 'rgba(32,24,43,0.28)',
+  grass: ['#9fd48a', '#a8db96', '#94cc82'],
+  grassDark: ['#6fa878', '#7ab684', '#85c08e'],
+  edge: '#7aab7e',
+  shadow: 'rgba(90, 70, 100, 0.18)',
 };
 
 export class Renderer {
@@ -200,33 +200,52 @@ export class Renderer {
   _drawBackground() {
     const ctx = this.ctx;
     const grd = ctx.createLinearGradient(0, 0, 0, this.viewH);
-    grd.addColorStop(0, '#85729b');
-    grd.addColorStop(0.42, '#b897a4');
-    grd.addColorStop(1, '#d5aa86');
+    grd.addColorStop(0, '#c8d8f0');
+    grd.addColorStop(0.35, '#e8d0e4');
+    grd.addColorStop(0.7, '#f5dcc8');
+    grd.addColorStop(1, '#f0e4c8');
     ctx.fillStyle = grd;
     ctx.fillRect(0, 0, this.viewW, this.viewH);
 
     const glow = ctx.createRadialGradient(
-      this.viewW * .2, this.viewH * .08, 0,
-      this.viewW * .2, this.viewH * .08, this.viewW * .7,
+      this.viewW * .55, this.viewH * .12, 0,
+      this.viewW * .55, this.viewH * .12, this.viewW * .55,
     );
-    glow.addColorStop(0, 'rgba(255,235,174,.42)');
-    glow.addColorStop(1, 'rgba(255,235,174,0)');
+    glow.addColorStop(0, 'rgba(255, 245, 200, .55)');
+    glow.addColorStop(1, 'rgba(255, 245, 200, 0)');
     ctx.fillStyle = glow;
     ctx.fillRect(0, 0, this.viewW, this.viewH);
 
+    // Soft cloud blobs (flat depth layers)
     ctx.save();
-    ctx.globalAlpha = .18;
-    ctx.fillStyle = '#fff5d6';
-    const t = Date.now() / 12000;
-    for (let i = 0; i < 18; i++) {
-      const x = (i * 137 + t * (9 + i % 3) * 20) % (this.viewW + 40) - 20;
+    const t = Date.now() / 18000;
+    for (let i = 0; i < 6; i++) {
+      const x = ((i * 160 + t * (12 + i * 3)) % (this.viewW + 120)) - 60;
+      const y = 28 + (i % 3) * 36;
+      ctx.globalAlpha = .22 + (i % 3) * .04;
+      ctx.fillStyle = '#fff8f0';
+      this._softBlob(ctx, x, y, 38 + (i % 3) * 10, 14);
+      this._softBlob(ctx, x + 22, y - 4, 28, 12);
+    }
+    ctx.restore();
+
+    ctx.save();
+    ctx.globalAlpha = .14;
+    ctx.fillStyle = '#fff8e8';
+    for (let i = 0; i < 22; i++) {
+      const x = (i * 137 + t * (6 + i % 3) * 14) % (this.viewW + 40) - 20;
       const y = (i * 83) % Math.max(this.viewH, 1);
       ctx.beginPath();
-      ctx.arc(x, y, 1 + (i % 3) * .6, 0, Math.PI * 2);
+      ctx.arc(x, y, 1.2 + (i % 3) * .5, 0, Math.PI * 2);
       ctx.fill();
     }
     ctx.restore();
+  }
+
+  _softBlob(ctx, x, y, rx, ry) {
+    ctx.beginPath();
+    ctx.ellipse(x, y, rx, ry, 0, 0, Math.PI * 2);
+    ctx.fill();
   }
 
   _drawHex(hex, key, isExpandable, isHighlight) {
@@ -252,7 +271,18 @@ export class Renderer {
 
   _drawHexPrism(corners, topColor, depth, highlight, expandable) {
     const ctx = this.ctx;
-    const depthPx = depth * HEX_SIZE * 3;
+    const depthPx = depth * HEX_SIZE * 2.6;
+
+    // Soft ground shadow under hex (flat depth)
+    const cx = corners.reduce((s, c) => s + c.x, 0) / 6;
+    const cy = corners.reduce((s, c) => s + c.y, 0) / 6;
+    const softShadow = ctx.createRadialGradient(cx + 2, cy + depthPx + 4, 2, cx + 2, cy + depthPx + 4, HEX_SIZE * .95);
+    softShadow.addColorStop(0, 'rgba(100, 80, 110, .16)');
+    softShadow.addColorStop(1, 'rgba(100, 80, 110, 0)');
+    ctx.fillStyle = softShadow;
+    ctx.beginPath();
+    ctx.ellipse(cx + 2, cy + depthPx + 5, HEX_SIZE * .9, HEX_SIZE * .42, 0, 0, Math.PI * 2);
+    ctx.fill();
 
     ctx.beginPath();
     corners.forEach((c, i) => {
@@ -272,7 +302,11 @@ export class Renderer {
       ctx.lineTo(c2.x, c2.y + depthPx);
       ctx.lineTo(c1.x, c1.y + depthPx);
       ctx.closePath();
-      ctx.fillStyle = i % 2 === 0 ? COLORS.grassDark[0] : COLORS.grassDark[2];
+      const sideGrad = ctx.createLinearGradient(c1.x, c1.y, c1.x, c1.y + depthPx);
+      const mid = i % 2 === 0 ? COLORS.grassDark[0] : COLORS.grassDark[2];
+      sideGrad.addColorStop(0, this._lighten(mid, .08));
+      sideGrad.addColorStop(1, mid);
+      ctx.fillStyle = sideGrad;
       ctx.fill();
     }
 
@@ -284,28 +318,30 @@ export class Renderer {
     ctx.closePath();
 
     if (expandable) {
-      ctx.fillStyle = 'rgba(232, 168, 56, 0.35)';
+      ctx.fillStyle = 'rgba(255, 210, 140, 0.4)';
     } else if (highlight) {
-      ctx.fillStyle = 'rgba(232, 168, 56, 0.55)';
+      ctx.fillStyle = 'rgba(255, 210, 140, 0.58)';
     } else {
       const topGradient = ctx.createLinearGradient(
         corners[0].x, corners[2].y,
         corners[3].x, corners[5].y,
       );
-      topGradient.addColorStop(0, this._lighten(topColor, .12));
-      topGradient.addColorStop(1, topColor);
+      topGradient.addColorStop(0, this._lighten(topColor, .18));
+      topGradient.addColorStop(.55, topColor);
+      topGradient.addColorStop(1, this._darken(topColor, .06));
       ctx.fillStyle = topGradient;
     }
     ctx.fill();
-    ctx.strokeStyle = 'rgba(48,91,59,.7)';
-    ctx.lineWidth = 1.2;
+    ctx.strokeStyle = 'rgba(120, 170, 130, .55)';
+    ctx.lineWidth = 2;
+    ctx.lineJoin = 'round';
     ctx.stroke();
 
     ctx.save();
     ctx.clip();
     const shine = ctx.createLinearGradient(0, corners[2].y, 0, corners[5].y);
-    shine.addColorStop(0, 'rgba(255,255,220,.13)');
-    shine.addColorStop(.5, 'rgba(255,255,220,0)');
+    shine.addColorStop(0, 'rgba(255,255,240,.22)');
+    shine.addColorStop(.45, 'rgba(255,255,240,0)');
     ctx.fillStyle = shine;
     ctx.fillRect(corners[4].x, corners[2].y, corners[1].x - corners[4].x, corners[5].y - corners[2].y);
     ctx.restore();
@@ -341,24 +377,34 @@ export class Renderer {
     if (hash % 3 !== 0) return;
     const ctx = this.ctx;
     ctx.save();
-    ctx.globalAlpha = .72;
+    ctx.globalAlpha = .8;
     const ox = ((hash % 19) - 9) * 1.15;
     const oy = (((hash * 7) % 15) - 7) * .75;
     if (hash % 2 === 0) {
-      ctx.fillStyle = hash % 4 === 0 ? '#f4d27c' : '#ef9fa0';
-      for (let i = 0; i < 4; i++) {
-        const a = i * Math.PI / 2;
+      // Soft pastel flower
+      const petal = hash % 4 === 0 ? '#f8d890' : '#f8b0b8';
+      ctx.fillStyle = petal;
+      for (let i = 0; i < 5; i++) {
+        const a = i * Math.PI * 2 / 5 - Math.PI / 2;
         ctx.beginPath();
-        ctx.arc(x + ox + Math.cos(a) * 2.4, y + oy + Math.sin(a) * 2.4, 1.8, 0, Math.PI * 2);
+        ctx.ellipse(
+          x + ox + Math.cos(a) * 2.6,
+          y + oy + Math.sin(a) * 2.6,
+          2.2, 1.6, a, 0, Math.PI * 2,
+        );
         ctx.fill();
       }
-      ctx.fillStyle = '#fff0ae';
+      const center = ctx.createRadialGradient(x + ox, y + oy, .2, x + ox, y + oy, 2);
+      center.addColorStop(0, '#fff8c8');
+      center.addColorStop(1, '#f0d070');
+      ctx.fillStyle = center;
       ctx.beginPath();
-      ctx.arc(x + ox, y + oy, 1.3, 0, Math.PI * 2);
+      ctx.arc(x + ox, y + oy, 1.6, 0, Math.PI * 2);
       ctx.fill();
     } else {
-      ctx.strokeStyle = '#477d55';
-      ctx.lineWidth = 1.4;
+      ctx.strokeStyle = '#78b888';
+      ctx.lineWidth = 1.6;
+      ctx.lineCap = 'round';
       ctx.beginPath();
       ctx.moveTo(x + ox, y + oy + 4);
       ctx.quadraticCurveTo(x + ox - 2, y + oy, x + ox - 4, y + oy - 3);
@@ -404,8 +450,15 @@ export class Renderer {
     (painters[hex.building] || (() => this._drawCrate(ctx, b.color)))();
 
     if (hex.level > 1) {
-      ctx.fillStyle = '#4d354e';
-      ctx.strokeStyle = '#f8d784';
+      ctx.fillStyle = 'rgba(90, 70, 100, .15)';
+      ctx.beginPath();
+      ctx.arc(14, -24, 8, 0, Math.PI * 2);
+      ctx.fill();
+      const badge = ctx.createRadialGradient(11, -27, 1, 13, -25, 8);
+      badge.addColorStop(0, '#fff8e0');
+      badge.addColorStop(1, '#f0c878');
+      ctx.fillStyle = badge;
+      ctx.strokeStyle = '#e8b070';
       ctx.lineWidth = 1.4;
       ctx.beginPath();
       ctx.arc(13, -25, 7.5, 0, Math.PI * 2);
@@ -414,7 +467,7 @@ export class Renderer {
       ctx.font = `800 7px Nunito, sans-serif`;
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
-      ctx.fillStyle = '#fff1bd';
+      ctx.fillStyle = '#8a6050';
       ctx.fillText(`${hex.level}★`, 13, -25);
     }
 
@@ -422,43 +475,55 @@ export class Renderer {
   }
 
   _drawCastShadow(ctx, height) {
-    const shadow = ctx.createRadialGradient(5, 8, 1, 5, 8, 21 + height * 5);
-    shadow.addColorStop(0, 'rgba(30,20,35,.32)');
-    shadow.addColorStop(.65, 'rgba(30,20,35,.16)');
-    shadow.addColorStop(1, 'rgba(30,20,35,0)');
+    const shadow = ctx.createRadialGradient(2, 10, 1, 2, 10, 20 + height * 4);
+    shadow.addColorStop(0, 'rgba(90, 70, 100, .22)');
+    shadow.addColorStop(.55, 'rgba(90, 70, 100, .1)');
+    shadow.addColorStop(1, 'rgba(90, 70, 100, 0)');
     ctx.fillStyle = shadow;
     ctx.save();
-    ctx.transform(1, .08, -.45, .45, 0, 0);
+    ctx.transform(1, .06, -.4, .42, 0, 0);
     ctx.beginPath();
-    ctx.arc(8, 10, 22, 0, Math.PI * 2);
+    ctx.arc(6, 12, 20, 0, Math.PI * 2);
     ctx.fill();
     ctx.restore();
   }
 
   _drawFoodBowl(ctx) {
-    ctx.fillStyle = '#96543f';
+    // Soft shadow layer already cast; pastel rounded bowl
+    const base = ctx.createLinearGradient(0, -2, 0, 10);
+    base.addColorStop(0, '#e8b898');
+    base.addColorStop(1, '#c88868');
+    ctx.fillStyle = base;
     ctx.beginPath();
     ctx.ellipse(0, 4, 14, 7, 0, 0, Math.PI * 2);
     ctx.fill();
-    ctx.fillStyle = '#d9875b';
+    const rim = ctx.createLinearGradient(0, -4, 0, 6);
+    rim.addColorStop(0, '#ffe0c0');
+    rim.addColorStop(1, '#e8a878');
+    ctx.fillStyle = rim;
     ctx.beginPath();
     ctx.ellipse(0, 1, 14, 6, 0, 0, Math.PI * 2);
     ctx.fill();
-    ctx.strokeStyle = '#6e3c35';
-    ctx.lineWidth = 1.3;
+    ctx.strokeStyle = '#c88870';
+    ctx.lineWidth = 1.4;
+    ctx.lineJoin = 'round';
     ctx.stroke();
-    ctx.fillStyle = '#5c3929';
+    ctx.fillStyle = '#a87858';
     ctx.beginPath();
     ctx.ellipse(0, 1, 10.5, 3.8, 0, 0, Math.PI * 2);
     ctx.fill();
     ['-6,-1', '-2,2', '3,-1', '7,1', '0,-2'].forEach((value) => {
       const [px, py] = value.split(',').map(Number);
-      ctx.fillStyle = '#b9814e';
+      const crumb = ctx.createRadialGradient(px, py, .2, px, py, 1.8);
+      crumb.addColorStop(0, '#f0c890');
+      crumb.addColorStop(1, '#d09860');
+      ctx.fillStyle = crumb;
       ctx.beginPath();
       ctx.arc(px, py, 1.7, 0, Math.PI * 2);
       ctx.fill();
     });
-    ctx.strokeStyle = 'rgba(255,224,173,.45)';
+    ctx.strokeStyle = 'rgba(255,240,210,.55)';
+    ctx.lineWidth = 1.5;
     ctx.beginPath();
     ctx.ellipse(-3, -1, 7, 2, 0, Math.PI, Math.PI * 1.8);
     ctx.stroke();
@@ -501,28 +566,29 @@ export class Renderer {
 
   _drawBed(ctx, double) {
     const width = double ? 29 : 22;
-    ctx.fillStyle = '#604a67';
+    ctx.fillStyle = '#b898c0';
     ctx.beginPath();
-    ctx.roundRect(-width / 2, -2, width, 12, 4);
+    ctx.roundRect(-width / 2, -2, width, 12, 6);
     ctx.fill();
     const cushion = ctx.createLinearGradient(0, -8, 0, 7);
-    cushion.addColorStop(0, '#e0b5c3');
-    cushion.addColorStop(1, '#a97791');
+    cushion.addColorStop(0, '#ffe0e8');
+    cushion.addColorStop(1, '#e8b0c0');
     ctx.fillStyle = cushion;
     ctx.beginPath();
     ctx.ellipse(0, -1, width / 2 - 1, 8, 0, 0, Math.PI * 2);
     ctx.fill();
-    ctx.strokeStyle = '#78566e';
-    ctx.lineWidth = 1.2;
+    ctx.strokeStyle = '#c898b0';
+    ctx.lineWidth = 1.3;
     ctx.stroke();
-    ctx.fillStyle = '#f0d2d4';
+    ctx.fillStyle = '#fff0f4';
     const pillows = double ? [-7, 7] : [0];
     pillows.forEach((px) => {
       ctx.beginPath();
       ctx.ellipse(px, -4, double ? 6 : 8, 3.6, -.08, 0, Math.PI * 2);
       ctx.fill();
     });
-    ctx.strokeStyle = 'rgba(255,241,225,.5)';
+    ctx.strokeStyle = 'rgba(255,245,250,.65)';
+    ctx.lineWidth = 1.4;
     ctx.beginPath();
     ctx.moveTo(-width / 2 + 4, 3);
     ctx.quadraticCurveTo(0, 8, width / 2 - 4, 3);
@@ -826,25 +892,28 @@ export class Renderer {
         const nx = -dy / length;
         const ny = dx / length;
 
-        ctx.strokeStyle = '#6e4938';
-        ctx.lineWidth = 2.8;
+        ctx.strokeStyle = '#c89878';
+        ctx.lineWidth = 3;
         ctx.lineCap = 'round';
         ctx.beginPath();
         ctx.moveTo(a.x + nx * 2, a.y + ny * 2 - 5);
         ctx.lineTo(b.x + nx * 2, b.y + ny * 2 - 5);
         ctx.stroke();
-        ctx.strokeStyle = '#a6734e';
-        ctx.lineWidth = 1;
+        ctx.strokeStyle = '#e8c8a8';
+        ctx.lineWidth = 1.2;
         ctx.beginPath();
-        ctx.moveTo(a.x + nx * 2, a.y + ny * 2 - 6);
-        ctx.lineTo(b.x + nx * 2, b.y + ny * 2 - 6);
+        ctx.moveTo(a.x + nx * 2, a.y + ny * 2 - 6.5);
+        ctx.lineTo(b.x + nx * 2, b.y + ny * 2 - 6.5);
         ctx.stroke();
 
         [a, b].forEach((point) => {
-          ctx.fillStyle = '#704837';
-          ctx.fillRect(point.x - 2, point.y - 9, 4, 11);
-          ctx.fillStyle = '#b58058';
-          ctx.fillRect(point.x - 1.5, point.y - 9, 1.5, 9);
+          const postGrad = ctx.createLinearGradient(point.x - 2, point.y - 9, point.x + 2, point.y + 2);
+          postGrad.addColorStop(0, '#e0b890');
+          postGrad.addColorStop(1, '#b88868');
+          ctx.fillStyle = postGrad;
+          ctx.beginPath();
+          ctx.roundRect(point.x - 2.2, point.y - 9, 4.4, 11, 2);
+          ctx.fill();
         });
       });
     });
@@ -883,17 +952,23 @@ export class Renderer {
     const seed = [...cat.id].reduce((sum, char) => sum + char.charCodeAt(0), 0);
     const phase = t * (moving ? 8 : 2) + seed;
     const appearance = cat.appearance || {
-      coat: '#c89562', dark: '#79543b', light: '#efd1aa', pattern: 'tabby', eyes: '#87aa60',
+      coat: '#f0c4a0', dark: '#d49a72', light: '#fff0dc', pattern: 'tabby',
+      eyes: '#8ecf7a', blush: '#f5a8b0',
     };
+    if (!appearance.blush) appearance.blush = '#f5a8b0';
     const activity = moving ? 'walk' : (cat.activity || 'explore');
 
     ctx.save();
-    ctx.translate(x, y - 5);
+    ctx.translate(x, y - 4);
     ctx.scale(facing, 1);
 
-    ctx.fillStyle = 'rgba(30,21,38,.2)';
+    // Soft flat shadow
+    const shadow = ctx.createRadialGradient(0, 11, 1, 0, 11, 16);
+    shadow.addColorStop(0, 'rgba(90, 70, 100, .2)');
+    shadow.addColorStop(1, 'rgba(90, 70, 100, 0)');
+    ctx.fillStyle = shadow;
     ctx.beginPath();
-    ctx.ellipse(0, 9, 17, 4.5, 0, 0, Math.PI * 2);
+    ctx.ellipse(0, 11, 15, 4.2, 0, 0, Math.PI * 2);
     ctx.fill();
 
     if (activity === 'sleep') {
@@ -912,177 +987,255 @@ export class Renderer {
     const playing = activity === 'play';
     const eating = activity === 'eat' || activity === 'drink';
     const sitting = activity === 'warm' || activity === 'watch' || activity === 'groom';
-    const bounce = walking ? Math.abs(Math.sin(phase)) * 1.6 : playing ? Math.abs(Math.sin(phase * .7)) * 3 : 0;
-    const bodyY = sitting ? -2 : -4 - bounce;
-    const headDip = eating ? 7 + Math.sin(phase * .45) * 1.5 : 0;
+    const bounce = walking ? Math.abs(Math.sin(phase)) * 1.4 : playing ? Math.abs(Math.sin(phase * .7)) * 2.8 : 0;
+    const bodyY = sitting ? 1 : -1 - bounce;
+    const headDip = eating ? 4 + Math.sin(phase * .45) * 1.2 : 0;
 
-    ctx.strokeStyle = appearance.dark;
-    ctx.lineWidth = 4.2;
+    // Tail — soft rounded stroke
+    ctx.strokeStyle = appearance.coat;
+    ctx.lineWidth = 5;
     ctx.lineCap = 'round';
     ctx.beginPath();
-    ctx.moveTo(-10, bodyY - 1);
+    ctx.moveTo(-8, bodyY);
     if (sitting) {
-      ctx.bezierCurveTo(-19, -10, -21, 1, -13, 5);
+      ctx.bezierCurveTo(-16, -6, -18, 2, -12, 6);
     } else {
-      ctx.bezierCurveTo(-19, bodyY - 8, -22, bodyY + 1, -17, bodyY + 5);
+      const wag = Math.sin(phase * .6) * 3;
+      ctx.bezierCurveTo(-16, bodyY - 6, -20 + wag * .2, bodyY + 2, -14 + wag, bodyY + 5);
     }
     ctx.stroke();
-    ctx.strokeStyle = this._lighten(appearance.dark, .08);
-    ctx.lineWidth = 1.3;
+    ctx.strokeStyle = this._lighten(appearance.coat, .12);
+    ctx.lineWidth = 2;
     ctx.stroke();
 
+    // Tiny paws
     if (!sitting) {
-      const legSwing = walking ? Math.sin(phase) * 3 : activity === 'litter' ? Math.sin(phase * 1.7) * 3 : 0;
-      ctx.strokeStyle = appearance.dark;
-      ctx.lineWidth = 3.5;
+      const legSwing = walking ? Math.sin(phase) * 2.5 : activity === 'litter' ? Math.sin(phase * 1.7) * 2.5 : 0;
+      ctx.fillStyle = appearance.dark;
       ctx.beginPath();
-      ctx.moveTo(-7, 1); ctx.lineTo(-8 + legSwing, 8);
-      ctx.moveTo(6, 1); ctx.lineTo(7 - legSwing, 8);
-      ctx.stroke();
+      ctx.ellipse(-5 + legSwing * .4, 7, 2.8, 2, 0, 0, Math.PI * 2);
+      ctx.ellipse(5 - legSwing * .4, 7, 2.8, 2, 0, 0, Math.PI * 2);
+      ctx.fill();
       ctx.fillStyle = appearance.light;
       ctx.beginPath();
-      ctx.ellipse(-8 + legSwing, 8, 3, 1.6, 0, 0, Math.PI * 2);
-      ctx.ellipse(7 - legSwing, 8, 3, 1.6, 0, 0, Math.PI * 2);
+      ctx.ellipse(-5 + legSwing * .4, 7.2, 1.6, 1, 0, 0, Math.PI * 2);
+      ctx.ellipse(5 - legSwing * .4, 7.2, 1.6, 1, 0, 0, Math.PI * 2);
       ctx.fill();
     }
 
-    ctx.fillStyle = appearance.coat;
+    // Soft body blob with gradient (kawaii chibi)
+    const bodyGrad = ctx.createRadialGradient(-2, bodyY - 3, 1, 0, bodyY, 12);
+    bodyGrad.addColorStop(0, this._lighten(appearance.coat, .16));
+    bodyGrad.addColorStop(1, appearance.coat);
+    ctx.fillStyle = bodyGrad;
     ctx.beginPath();
-    ctx.ellipse(sitting ? -2 : -1, bodyY, sitting ? 9 : 13, sitting ? 12 : 8, -.08, 0, Math.PI * 2);
+    ctx.ellipse(sitting ? -1 : 0, bodyY, sitting ? 9 : 11, sitting ? 9 : 7.5, -.05, 0, Math.PI * 2);
     ctx.fill();
     ctx.strokeStyle = appearance.dark;
-    ctx.lineWidth = 1.2;
+    ctx.lineWidth = 1.4;
+    ctx.lineJoin = 'round';
     ctx.stroke();
 
     this._drawCoatPattern(ctx, appearance, bodyY, sitting);
 
-    const headX = sitting ? 3 : 10;
-    const headY = (sitting ? -12 : -9 - bounce) + headDip;
-    ctx.fillStyle = appearance.coat;
+    // Big kawaii head
+    const headX = sitting ? 1 : 7;
+    const headY = (sitting ? -10 : -8 - bounce) + headDip;
+    const headGrad = ctx.createRadialGradient(headX - 2, headY - 3, 1, headX, headY, 10);
+    headGrad.addColorStop(0, this._lighten(appearance.coat, .2));
+    headGrad.addColorStop(1, appearance.coat);
+    ctx.fillStyle = headGrad;
     ctx.beginPath();
-    ctx.arc(headX, headY, 7.4, 0, Math.PI * 2);
+    ctx.arc(headX, headY, 9.2, 0, Math.PI * 2);
     ctx.fill();
     ctx.strokeStyle = appearance.dark;
+    ctx.lineWidth = 1.4;
     ctx.stroke();
 
-    ctx.fillStyle = appearance.coat;
-    ctx.strokeStyle = appearance.dark;
-    ctx.beginPath();
-    ctx.moveTo(headX - 6, headY - 4);
-    ctx.lineTo(headX - 5, headY - 11);
-    ctx.lineTo(headX - 1, headY - 6);
-    ctx.moveTo(headX + 2, headY - 6);
-    ctx.lineTo(headX + 6, headY - 11);
-    ctx.lineTo(headX + 7, headY - 3);
-    ctx.fill();
-    ctx.stroke();
+    // Soft rounded ears
+    this._drawKawaiiEar(ctx, appearance, headX - 6.5, headY - 6, -1);
+    this._drawKawaiiEar(ctx, appearance, headX + 6.5, headY - 6, 1);
 
     this._drawCatFace(ctx, appearance, headX, headY, eating, activity === 'groom', phase);
   }
 
-  _drawSleepingCat(ctx, appearance, phase) {
-    const breathe = Math.sin(phase) * .35;
+  _drawKawaiiEar(ctx, appearance, x, y, side) {
     ctx.fillStyle = appearance.coat;
     ctx.strokeStyle = appearance.dark;
     ctx.lineWidth = 1.3;
     ctx.beginPath();
-    ctx.ellipse(0, 0, 14 + breathe, 9 + breathe, -.14, 0, Math.PI * 2);
+    ctx.moveTo(x - side * 2.5, y + 2);
+    ctx.quadraticCurveTo(x - side * 1.5, y - 9, x + side * 4, y - 1);
+    ctx.quadraticCurveTo(x + side * .5, y + 1, x - side * 2.5, y + 2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.fillStyle = appearance.blush || '#f5a8b0';
+    ctx.globalAlpha = .55;
+    ctx.beginPath();
+    ctx.ellipse(x + side * .4, y - 2.5, 1.8, 2.4, side * .2, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+  }
+
+  _drawSleepingCat(ctx, appearance, phase) {
+    const breathe = Math.sin(phase) * .4;
+
+    const bodyGrad = ctx.createRadialGradient(-2, -2, 1, 0, 0, 14);
+    bodyGrad.addColorStop(0, this._lighten(appearance.coat, .14));
+    bodyGrad.addColorStop(1, appearance.coat);
+    ctx.fillStyle = bodyGrad;
+    ctx.strokeStyle = appearance.dark;
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.ellipse(0, 1, 13 + breathe, 8.5 + breathe, -.12, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
 
-    ctx.strokeStyle = appearance.dark;
-    ctx.lineWidth = 4;
+    // Curled soft tail
+    ctx.strokeStyle = appearance.coat;
+    ctx.lineWidth = 5;
     ctx.lineCap = 'round';
     ctx.beginPath();
-    ctx.arc(-1, 0, 12, -.2, Math.PI * 1.18);
+    ctx.arc(-2, 1, 11, -.15, Math.PI * 1.15);
     ctx.stroke();
 
-    ctx.fillStyle = appearance.coat;
+    // Head
+    const headGrad = ctx.createRadialGradient(7, -4, 1, 8, -2, 8);
+    headGrad.addColorStop(0, this._lighten(appearance.coat, .18));
+    headGrad.addColorStop(1, appearance.coat);
+    ctx.fillStyle = headGrad;
     ctx.beginPath();
-    ctx.arc(8, -3, 7, 0, Math.PI * 2);
+    ctx.arc(8, -2, 8, 0, Math.PI * 2);
     ctx.fill();
+    ctx.strokeStyle = appearance.dark;
+    ctx.lineWidth = 1.3;
+    ctx.stroke();
+
+    this._drawKawaiiEar(ctx, appearance, 4, -7, -1);
+    this._drawKawaiiEar(ctx, appearance, 13, -6, 1);
+
+    // Closed sleepy eyes
     ctx.strokeStyle = appearance.dark;
     ctx.lineWidth = 1.2;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.arc(5.5, -2, 1.6, .25, Math.PI - .25);
+    ctx.arc(10.5, -2, 1.6, .25, Math.PI - .25);
     ctx.stroke();
 
+    // Soft blush
+    ctx.fillStyle = appearance.blush || '#f5a8b0';
+    ctx.globalAlpha = .45;
     ctx.beginPath();
-    ctx.moveTo(3, -7); ctx.lineTo(4, -13); ctx.lineTo(8, -8);
-    ctx.moveTo(9, -9); ctx.lineTo(14, -12); ctx.lineTo(14, -6);
+    ctx.ellipse(4, 0, 2.2, 1.3, 0, 0, Math.PI * 2);
+    ctx.ellipse(12, 0, 2.2, 1.3, 0, 0, Math.PI * 2);
     ctx.fill();
-    ctx.stroke();
+    ctx.globalAlpha = 1;
 
-    ctx.strokeStyle = appearance.dark;
-    ctx.lineWidth = 1;
+    // Tiny nose
+    ctx.fillStyle = '#e89098';
     ctx.beginPath();
-    ctx.arc(6, -3, 1.5, .2, Math.PI - .2);
-    ctx.stroke();
+    ctx.ellipse(8, 0.5, 1.2, .8, 0, 0, Math.PI * 2);
+    ctx.fill();
   }
 
   _drawCoatPattern(ctx, appearance, bodyY, sitting) {
     ctx.save();
     ctx.strokeStyle = appearance.dark;
     ctx.fillStyle = appearance.light;
-    ctx.globalAlpha = .72;
+    ctx.globalAlpha = .55;
     if (appearance.pattern === 'tabby') {
-      ctx.lineWidth = 1.5;
-      [-5, 0, 5].forEach((offset) => {
+      ctx.lineWidth = 1.6;
+      ctx.lineCap = 'round';
+      [-4, 0, 4].forEach((offset) => {
         ctx.beginPath();
-        ctx.moveTo(offset - 2, bodyY - 6);
-        ctx.quadraticCurveTo(offset, bodyY - 2, offset + 1, bodyY);
+        ctx.moveTo(offset - 1.5, bodyY - 4);
+        ctx.quadraticCurveTo(offset, bodyY - 1, offset + .5, bodyY + 2);
         ctx.stroke();
       });
     } else if (appearance.pattern === 'patches') {
       ctx.beginPath();
-      ctx.ellipse(-4, bodyY - 2, 5, 4, .4, 0, Math.PI * 2);
+      ctx.ellipse(-3, bodyY - 1, 4.5, 3.5, .35, 0, Math.PI * 2);
       ctx.fill();
     } else if (appearance.pattern === 'tuxedo') {
       ctx.beginPath();
-      ctx.ellipse(sitting ? 1 : 5, bodyY + 3, 4, 3.5, 0, 0, Math.PI * 2);
+      ctx.ellipse(sitting ? 0 : 3, bodyY + 2, 3.5, 3, 0, 0, Math.PI * 2);
       ctx.fill();
     } else if (appearance.pattern === 'points') {
       ctx.fillStyle = appearance.dark;
+      ctx.globalAlpha = .35;
       ctx.beginPath();
-      ctx.ellipse(-8, bodyY + 1, 4, 5, 0, 0, Math.PI * 2);
+      ctx.ellipse(-7, bodyY + 1, 3.5, 4, 0, 0, Math.PI * 2);
       ctx.fill();
     }
     ctx.restore();
   }
 
   _drawCatFace(ctx, appearance, x, y, lookingDown, grooming, phase) {
-    const eyeY = y - 1;
-    ctx.fillStyle = appearance.eyes;
+    // Soft blush cheeks
+    ctx.fillStyle = appearance.blush || '#f5a8b0';
+    ctx.globalAlpha = .5;
+    ctx.beginPath();
+    ctx.ellipse(x - 5.5, y + 2.2, 2.4, 1.5, 0, 0, Math.PI * 2);
+    ctx.ellipse(x + 5.5, y + 2.2, 2.4, 1.5, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.globalAlpha = 1;
+
+    const eyeY = y - .5;
     if (grooming && Math.sin(phase) > 0) {
       ctx.strokeStyle = appearance.dark;
-      ctx.lineWidth = 1;
+      ctx.lineWidth = 1.2;
+      ctx.lineCap = 'round';
       ctx.beginPath();
-      ctx.arc(x - 2.5, eyeY, 1.5, .15, Math.PI - .15);
-      ctx.arc(x + 2.5, eyeY, 1.5, .15, Math.PI - .15);
+      ctx.arc(x - 3, eyeY, 1.8, .2, Math.PI - .2);
+      ctx.arc(x + 3, eyeY, 1.8, .2, Math.PI - .2);
       ctx.stroke();
     } else {
-      ctx.beginPath();
-      ctx.ellipse(x - 2.5, eyeY, 1.35, lookingDown ? .8 : 1.8, 0, 0, Math.PI * 2);
-      ctx.ellipse(x + 2.5, eyeY, 1.35, lookingDown ? .8 : 1.8, 0, 0, Math.PI * 2);
-      ctx.fill();
-      ctx.fillStyle = '#24202b';
-      ctx.fillRect(x - 2.75, eyeY - 1, .5, 2);
-      ctx.fillRect(x + 2.25, eyeY - 1, .5, 2);
+      // Big shiny kawaii eyes with soft gradient
+      const eyeH = lookingDown ? 1.4 : 3.2;
+      [
+        [x - 3, eyeY],
+        [x + 3, eyeY],
+      ].forEach(([ex, ey]) => {
+        const eyeGrad = ctx.createRadialGradient(ex - .5, ey - .8, .2, ex, ey, 2.8);
+        eyeGrad.addColorStop(0, this._lighten(appearance.eyes, .25));
+        eyeGrad.addColorStop(1, appearance.eyes);
+        ctx.fillStyle = eyeGrad;
+        ctx.beginPath();
+        ctx.ellipse(ex, ey, 2.4, eyeH, 0, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.fillStyle = '#3a3040';
+        ctx.beginPath();
+        ctx.ellipse(ex + .15, ey + .15, 1.1, eyeH * .55, 0, 0, Math.PI * 2);
+        ctx.fill();
+        // Soft highlight sparkles
+        ctx.fillStyle = 'rgba(255,255,255,.9)';
+        ctx.beginPath();
+        ctx.arc(ex - .7, ey - eyeH * .35, .7, 0, Math.PI * 2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.arc(ex + .6, ey + .2, .35, 0, Math.PI * 2);
+        ctx.fill();
+      });
     }
 
-    ctx.fillStyle = '#d98385';
+    // Soft rounded nose
+    ctx.fillStyle = '#e89098';
     ctx.beginPath();
-    ctx.moveTo(x - 1.1, y + 2);
-    ctx.lineTo(x + 1.1, y + 2);
-    ctx.lineTo(x, y + 3.3);
-    ctx.closePath();
+    ctx.moveTo(x - 1.3, y + 2.2);
+    ctx.quadraticCurveTo(x, y + 4, x + 1.3, y + 2.2);
+    ctx.quadraticCurveTo(x, y + 1.6, x - 1.3, y + 2.2);
     ctx.fill();
 
-    ctx.strokeStyle = 'rgba(70,52,61,.75)';
-    ctx.lineWidth = .65;
+    // Soft whiskers
+    ctx.strokeStyle = 'rgba(120, 100, 110, .45)';
+    ctx.lineWidth = .7;
+    ctx.lineCap = 'round';
     ctx.beginPath();
-    ctx.moveTo(x - 1, y + 3.2); ctx.lineTo(x - 7, y + 2);
-    ctx.moveTo(x - 1, y + 4); ctx.lineTo(x - 7, y + 5);
-    ctx.moveTo(x + 1, y + 3.2); ctx.lineTo(x + 7, y + 2);
-    ctx.moveTo(x + 1, y + 4); ctx.lineTo(x + 7, y + 5);
+    ctx.moveTo(x - 1.5, y + 3); ctx.lineTo(x - 8, y + 1.8);
+    ctx.moveTo(x - 1.5, y + 4); ctx.lineTo(x - 8, y + 4.5);
+    ctx.moveTo(x + 1.5, y + 3); ctx.lineTo(x + 8, y + 1.8);
+    ctx.moveTo(x + 1.5, y + 4); ctx.lineTo(x + 8, y + 4.5);
     ctx.stroke();
   }
 
@@ -1093,16 +1246,24 @@ export class Renderer {
     };
     const icon = activityIcons[cat.activity];
     if (!icon) return;
-    const bubbleY = y - 34 + Math.sin(t * 2 + seed) * 1.2;
+    const bubbleY = y - 36 + Math.sin(t * 2 + seed) * 1.2;
     ctx.save();
-    ctx.fillStyle = 'rgba(255,250,229,.9)';
-    ctx.strokeStyle = 'rgba(83,60,81,.28)';
-    ctx.lineWidth = 1;
+    // Soft layered bubble (flat depth)
+    ctx.fillStyle = 'rgba(90, 70, 100, .12)';
     ctx.beginPath();
-    ctx.arc(x + 13, bubbleY, 7.5, 0, Math.PI * 2);
+    ctx.arc(x + 14, bubbleY + 1.5, 8.5, 0, Math.PI * 2);
+    ctx.fill();
+    const bubbleGrad = ctx.createRadialGradient(x + 12, bubbleY - 2, 1, x + 13, bubbleY, 8);
+    bubbleGrad.addColorStop(0, '#fffef8');
+    bubbleGrad.addColorStop(1, '#ffe8f0');
+    ctx.fillStyle = bubbleGrad;
+    ctx.strokeStyle = 'rgba(200, 160, 180, .45)';
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.arc(x + 13, bubbleY, 8, 0, Math.PI * 2);
     ctx.fill();
     ctx.stroke();
-    ctx.fillStyle = '#5a4055';
+    ctx.fillStyle = '#7a5a70';
     ctx.font = `800 ${icon === 'z' ? 9 : 8}px Nunito, sans-serif`;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
@@ -1113,15 +1274,26 @@ export class Renderer {
   _drawCatName(ctx, cat, x, y) {
     ctx.save();
     ctx.font = `800 ${HEX_SIZE * 0.17}px Nunito, sans-serif`;
-    const width = ctx.measureText(cat.name).width + 9;
-    ctx.fillStyle = 'rgba(48,34,53,.78)';
+    const width = ctx.measureText(cat.name).width + 12;
+    // Soft shadow layer
+    ctx.fillStyle = 'rgba(90, 70, 100, .18)';
     ctx.beginPath();
-    ctx.roundRect(x - width / 2, y + 12, width, 12, 6);
+    ctx.roundRect(x - width / 2 + 1, y + 13, width, 13, 8);
     ctx.fill();
-    ctx.fillStyle = '#fff8e9';
+    const tagGrad = ctx.createLinearGradient(0, y + 12, 0, y + 25);
+    tagGrad.addColorStop(0, 'rgba(255, 248, 240, .92)');
+    tagGrad.addColorStop(1, 'rgba(255, 230, 235, .9)');
+    ctx.fillStyle = tagGrad;
+    ctx.beginPath();
+    ctx.roundRect(x - width / 2, y + 12, width, 13, 8);
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(220, 180, 190, .5)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+    ctx.fillStyle = '#7a5a68';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
-    ctx.fillText(cat.name, x, y + 18);
+    ctx.fillText(cat.name, x, y + 18.5);
     ctx.restore();
   }
 
