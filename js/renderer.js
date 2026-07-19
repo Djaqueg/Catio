@@ -512,14 +512,14 @@ export class Renderer {
   /* ── Gato low-poly ── */
 
   _catMaterials(appearance) {
-    const soft = (hex) => this._mat(hex, { roughness: 0.7 });
+    const soft = (hex) => this._mat(hex, { roughness: 0.62 });
     return {
       coat: soft(new THREE.Color(appearance.coat).getHex()),
       light: soft(new THREE.Color(appearance.light).getHex()),
       dark: soft(new THREE.Color(appearance.dark).getHex()),
-      pink: this._mat(0xe89098, { roughness: 0.62 }),
-      eye: this._mat(0x3a3040, { roughness: 0.32 }),
-      eyeColor: this._mat(new THREE.Color(appearance.eyes || '#8ecf7a').getHex(), { roughness: 0.28 }),
+      pink: this._mat(0xe89098, { roughness: 0.55 }),
+      eye: this._mat(0x3a3040, { roughness: 0.28 }),
+      eyeColor: this._mat(new THREE.Color(appearance.eyes || '#8ecf7a').getHex(), { roughness: 0.22 }),
     };
   }
 
@@ -532,113 +532,168 @@ export class Renderer {
     const body = new THREE.Group();
     root.add(body);
 
-    const torso = new THREE.Mesh(new THREE.IcosahedronGeometry(0.34, 1), mats.coat);
-    torso.scale.set(1.5, 0.95, 1.0);
-    torso.position.y = 0.46;
+    // Cuerpo elipsoide continuo (sin piezas en el lomo)
+    const bodyPts = [];
+    for (let i = 0; i <= 32; i++) {
+      const t = i / 32;
+      const a = t * Math.PI;
+      bodyPts.push(new THREE.Vector2(
+        Math.max(0.001, Math.sin(a) * 0.3),
+        Math.cos(a) * 0.58,
+      ));
+    }
+    const torsoGeo = new THREE.LatheGeometry(bodyPts, 32);
+    torsoGeo.rotateZ(-Math.PI / 2);
+    torsoGeo.scale(1, 1.02, 1.06);
+    torsoGeo.computeVertexNormals();
+    const torso = new THREE.Mesh(torsoGeo, mats.coat);
+    torso.position.set(0.06, 0.47, 0);
     torso.castShadow = true;
     body.add(torso);
 
-    const rump = new THREE.Mesh(new THREE.IcosahedronGeometry(0.28, 1), mats.coat);
-    rump.position.set(-0.32, 0.48, 0);
-    rump.castShadow = true;
-    body.add(rump);
-
-    // Cabeza
+    // Cabeza profundamente solapada con el pecho (sin cuello suelto)
     const headG = new THREE.Group();
-    headG.position.set(0.46, 0.74, 0);
+    headG.position.set(0.48, 0.66, 0);
     body.add(headG);
 
-    const head = new THREE.Mesh(new THREE.IcosahedronGeometry(0.22, 1), mats.coat);
-    head.scale.set(1.0, 0.95, 0.92);
+    const headPts = [];
+    for (let i = 0; i <= 24; i++) {
+      const t = i / 24;
+      const a = t * Math.PI;
+      headPts.push(new THREE.Vector2(
+        Math.max(0.001, Math.sin(a) * 0.2),
+        Math.cos(a) * 0.2,
+      ));
+    }
+    const headGeo = new THREE.LatheGeometry(headPts, 28);
+    headGeo.computeVertexNormals();
+    const head = new THREE.Mesh(headGeo, mats.coat);
     head.castShadow = true;
+    head.position.set(-0.08, 0.02, 0);
     headG.add(head);
 
-    const muzzle = new THREE.Mesh(new THREE.SphereGeometry(0.09, 8, 6), mats.light);
-    muzzle.scale.set(1.55, 0.85, 1.1);
-    muzzle.position.set(0.17, -0.06, 0);
+    // Hocico integrado, más corto y redondo
+    const muzzle = new THREE.Mesh(new THREE.IcosahedronGeometry(0.07, 1), mats.light);
+    muzzle.scale.set(1.2, 0.88, 1.05);
+    muzzle.position.set(0.13, -0.045, 0);
     headG.add(muzzle);
 
-    const nose = new THREE.Mesh(new THREE.SphereGeometry(0.028, 6, 5), mats.pink);
-    nose.position.set(0.245, -0.03, 0);
+    const nose = new THREE.Mesh(new THREE.IcosahedronGeometry(0.02, 1), mats.pink);
+    nose.position.set(0.19, -0.022, 0);
     headG.add(nose);
 
-    const mouth = new THREE.Mesh(new THREE.SphereGeometry(0.04, 6, 4), mats.eye);
-    mouth.scale.set(1.5, 1.2, 1.2);
-    mouth.position.set(0.19, -0.15, 0);
+    const mouth = new THREE.Mesh(new THREE.IcosahedronGeometry(0.03, 1), mats.eye);
+    mouth.scale.set(1.35, 1.1, 1.1);
+    mouth.position.set(0.15, -0.11, 0);
     mouth.visible = false;
     headG.add(mouth);
 
-    const earGeo = new THREE.ConeGeometry(0.095, 0.22, 6);
-    const ears = [0.12, -0.12].map((z) => {
+    // Orejas suaves con base redonda
+    const earGeo = new THREE.ConeGeometry(0.08, 0.18, 10);
+    const ears = [0.1, -0.1].map((z) => {
+      const earG = new THREE.Group();
+      earG.position.set(-0.04, 0.16, z);
+      earG.rotation.x = z > 0 ? 0.14 : -0.14;
       const ear = new THREE.Mesh(earGeo, mats.coat);
-      ear.position.set(-0.02, 0.22, z);
-      ear.rotation.x = z > 0 ? 0.18 : -0.18;
       ear.castShadow = true;
-      headG.add(ear);
-      return ear;
+      earG.add(ear);
+      const base = new THREE.Mesh(new THREE.IcosahedronGeometry(0.048, 1), mats.coat);
+      base.position.y = -0.015;
+      earG.add(base);
+      const inner = new THREE.Mesh(new THREE.ConeGeometry(0.04, 0.1, 8), mats.pink);
+      inner.position.set(0.012, 0.02, 0);
+      inner.scale.set(0.65, 0.85, 0.45);
+      earG.add(inner);
+      headG.add(earG);
+      return earG;
     });
 
-    const eyeGeo = new THREE.SphereGeometry(0.038, 8, 6);
-    const eyes = [0.1, -0.1].map((z) => {
+    // Ojos: casi planos y hundidos en la cara
+    const eyes = [0.072, -0.072].map((z) => {
       const eyeG = new THREE.Group();
-      eyeG.position.set(0.17, 0.05, z);
-      const ball = new THREE.Mesh(eyeGeo, mats.eyeColor);
-      const pupil = new THREE.Mesh(new THREE.SphereGeometry(0.016, 6, 4), mats.eye);
-      pupil.position.x = 0.024;
-      eyeG.add(ball, pupil);
+      eyeG.position.set(0.1, 0.028, z);
+      const ballGeo = new THREE.IcosahedronGeometry(0.034, 1);
+      ballGeo.scale(0.18, 1, 1);
+      ballGeo.computeVertexNormals();
+      const ball = new THREE.Mesh(ballGeo, mats.eyeColor);
+      eyeG.add(ball);
+      const pupilGeo = new THREE.IcosahedronGeometry(0.014, 1);
+      pupilGeo.scale(0.22, 1.2, 0.9);
+      pupilGeo.computeVertexNormals();
+      const pupil = new THREE.Mesh(pupilGeo, mats.eye);
+      pupil.position.x = 0.005;
+      eyeG.add(pupil);
+      const shine = new THREE.Mesh(
+        new THREE.IcosahedronGeometry(0.0045, 0),
+        this._mat(0xffffff, { roughness: 0.12 }),
+      );
+      shine.position.set(0.008, 0.008, 0.005);
+      eyeG.add(shine);
       headG.add(eyeG);
       return eyeG;
     });
 
-    // Patas redondeadas
-    const legGeo = new THREE.CapsuleGeometry(0.05, 0.22, 4, 8);
-    const pawGeo = new THREE.SphereGeometry(0.065, 6, 5);
+    // Mejillas suaves (blush)
+    [0.09, -0.09].forEach((z) => {
+      const blushMat = this._mat(0xf5a8b0, { roughness: 0.9 }).clone();
+      blushMat.transparent = true;
+      blushMat.opacity = 0.4;
+      const blush = new THREE.Mesh(new THREE.IcosahedronGeometry(0.032, 1), blushMat);
+      blush.scale.set(0.35, 0.65, 0.95);
+      blush.position.set(0.09, -0.035, z);
+      headG.add(blush);
+    });
+
+    // Patas redondeadas y un poco más finas
+    const legGeo = new THREE.CapsuleGeometry(0.04, 0.18, 6, 12);
+    const pawGeo = new THREE.IcosahedronGeometry(0.05, 1);
     const legs = [
-      [0.32, 0.16], [0.32, -0.16], [-0.34, 0.16], [-0.34, -0.16],
+      [0.26, 0.13], [0.26, -0.13], [-0.28, 0.13], [-0.28, -0.13],
     ].map(([x, z]) => {
       const legG = new THREE.Group();
-      legG.position.set(x, 0.4, z);
+      legG.position.set(x, 0.38, z);
       const leg = new THREE.Mesh(legGeo, mats.coat);
-      leg.position.y = -0.16;
+      leg.position.y = -0.14;
       leg.castShadow = true;
       const paw = new THREE.Mesh(pawGeo, mats.light);
-      paw.position.set(0.015, -0.33, 0);
+      paw.scale.set(1.15, 0.7, 1.1);
+      paw.position.set(0.01, -0.28, 0);
       legG.add(leg, paw);
       body.add(legG);
       return legG;
     });
 
-    // Cola articulada suave
+    // Cola articulada más delgada y suave
     const tail1 = new THREE.Group();
-    tail1.position.set(-0.55, 0.6, 0);
+    tail1.position.set(-0.52, 0.56, 0);
     body.add(tail1);
-    const t1 = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.065, 0.34, 8), mats.coat);
-    t1.position.y = 0.16;
+    const t1 = new THREE.Mesh(new THREE.CapsuleGeometry(0.04, 0.2, 6, 12), mats.coat);
+    t1.position.y = 0.13;
     t1.castShadow = true;
     tail1.add(t1);
     const tail2 = new THREE.Group();
-    tail2.position.y = 0.33;
+    tail2.position.y = 0.28;
     tail1.add(tail2);
-    const t2 = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.05, 0.3, 8), mats.coat);
-    t2.position.y = 0.14;
+    const t2 = new THREE.Mesh(new THREE.CapsuleGeometry(0.03, 0.16, 6, 12), mats.coat);
+    t2.position.y = 0.11;
     t2.castShadow = true;
     tail2.add(t2);
-    const tip = new THREE.Mesh(new THREE.SphereGeometry(0.045, 6, 5), mats.light);
-    tip.position.y = 0.36;
+    const tip = new THREE.Mesh(new THREE.IcosahedronGeometry(0.038, 1), mats.light);
+    tip.position.y = 0.26;
     tail2.add(tip);
 
     // Etiqueta con nombre y burbuja de actividad
     const nameSprite = this._makeTextSprite(cat.name, {
       bg: 'rgba(255,248,240,.94)', fg: '#7a5a68', size: 44,
     });
-    nameSprite.position.set(0, 1.45, 0);
+    nameSprite.position.set(0, 1.4, 0);
     root.add(nameSprite);
 
     const bubble = new THREE.Group();
-    bubble.position.set(0.35, 1.85, 0);
+    bubble.position.set(0.35, 1.8, 0);
     root.add(bubble);
 
-    root.scale.setScalar(0.82);
+    root.scale.setScalar(0.88);
     root.userData = {
       body, headG, ears, eyes, mouth, legs, tail1, tail2,
       nameSprite, bubble, bubbleIcon: null, name: cat.name,
@@ -745,11 +800,11 @@ export class Renderer {
   _defaultPose() {
     return {
       body: { pos: [0, 0, 0], rot: [0, 0, 0], scale: [1, 1, 1] },
-      head: { pos: [0.46, 0.74, 0], rot: [0, 0, 0] },
+      head: { pos: [0.48, 0.66, 0], rot: [0, 0, 0] },
       legs: Array.from({ length: 4 }, () => ({ rot: [0, 0, 0], scale: [1, 1, 1] })),
       tail1: { rot: [0, 0, 0.55] },
       tail2: { rot: [0, 0, -0.5] },
-      ears: [{ rot: [0.18, 0, 0] }, { rot: [-0.18, 0, 0] }],
+      ears: [{ rot: [0.16, 0, 0] }, { rot: [-0.16, 0, 0] }],
       eyes: [{ scale: [1, 1, 1] }, { scale: [1, 1, 1] }],
       mouth: { visible: false, scaleY: 1 },
     };
@@ -778,7 +833,7 @@ export class Renderer {
         setPos(p.body, 0, -0.26, 0);
         setScale(p.body, 1.05 + breathe, 0.72 - breathe, 1.12);
         p.legs.forEach((leg) => { leg.scale = [1, 0.25, 1]; });
-        setPos(p.head, 0.4, 0.5, 0.05);
+        setPos(p.head, 0.46, 0.44, 0.04);
         setRot(p.head, 0, 0, -0.35);
         p.eyes.forEach((eye) => { eye.scale = [1, 0.12, 1]; });
         setRot(p.tail1, 0.9, 0, 1.4);
@@ -789,7 +844,7 @@ export class Renderer {
         setPos(p.body, 0, -0.24, 0);
         setScale(p.body, 1.02, 0.78, 1.1);
         p.legs.forEach((leg) => { leg.scale = [1, 0.22, 1]; });
-        setPos(p.head, 0.44, 0.66, 0);
+        setPos(p.head, 0.5, 0.6, 0);
         setRot(p.tail1, 1.1, 0, 1.3);
         setRot(p.tail2, 0.6, 0, -0.3);
         break;
@@ -839,7 +894,7 @@ export class Renderer {
       case 'eat':
       case 'drink': {
         setRot(p.head, 0, 0, -0.5 + Math.sin(phase * 0.45) * 0.05);
-        setPos(p.head, 0.46, 0.6, 0);
+        setPos(p.head, 0.52, 0.54, 0);
         p.eyes.forEach((eye) => { eye.scale = [1, 0.4, 1]; });
         break;
       }
@@ -862,8 +917,8 @@ export class Renderer {
         break;
       }
       case 'ear_twitch': {
-        p.ears[0].rot = [0.18, 0, Math.sin(phase * 5) > 0 ? 0.32 : 0];
-        p.ears[1].rot = [-0.18, 0, Math.sin(phase * 5 + 1) > 0 ? -0.28 : 0];
+        p.ears[0].rot = [0.16, 0, Math.sin(phase * 5) > 0 ? 0.32 : 0];
+        p.ears[1].rot = [-0.16, 0, Math.sin(phase * 5 + 1) > 0 ? -0.28 : 0];
         setRot(p.head, 0, Math.sin(phase * 0.8) * 0.18, 0);
         break;
       }
