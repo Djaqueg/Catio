@@ -924,7 +924,7 @@ export class Renderer {
     const destination = axialToPixel(hex.q, hex.r);
     let state = this.catAnimations.get(cat.id);
     if (!state) {
-      state = { x: destination.x, y: destination.y, facing: 1, moving: false };
+      state = { x: destination.x, y: destination.y, facing: 1, moving: false, bob: 0 };
       this.catAnimations.set(cat.id, state);
     }
 
@@ -933,7 +933,7 @@ export class Renderer {
     const distance = Math.hypot(dx, dy);
     state.moving = distance > 1.2;
     if (state.moving) {
-      const step = Math.min(distance, 35 * delta);
+      const step = Math.min(distance, 78 * delta);
       state.x += (dx / distance) * step;
       state.y += (dy / distance) * step;
       if (Math.abs(dx) > .5) state.facing = dx < 0 ? -1 : 1;
@@ -950,13 +950,13 @@ export class Renderer {
     const ctx = this.ctx;
     const t = Date.now() / 1000;
     const seed = [...cat.id].reduce((sum, char) => sum + char.charCodeAt(0), 0);
-    const phase = t * (moving ? 8 : 2) + seed;
+    const phase = t * (moving ? 9 : 2.2) + seed;
     const appearance = cat.appearance || {
       coat: '#f0c4a0', dark: '#d49a72', light: '#fff0dc', pattern: 'tabby',
       eyes: '#8ecf7a', blush: '#f5a8b0',
     };
     if (!appearance.blush) appearance.blush = '#f5a8b0';
-    const activity = moving ? 'walk' : (cat.activity || 'explore');
+    let activity = moving ? 'walk' : (cat.activity || 'explore');
 
     ctx.save();
     ctx.translate(x, y - 4);
@@ -971,8 +971,11 @@ export class Renderer {
     ctx.ellipse(0, 11, 15, 4.2, 0, 0, Math.PI * 2);
     ctx.fill();
 
-    if (activity === 'sleep') {
-      this._drawSleepingCat(ctx, appearance, phase);
+    if (activity === 'sleep' || activity === 'loaf') {
+      this._drawSleepingCat(ctx, appearance, phase, activity === 'loaf');
+    } else if (activity === 'roll') {
+      ctx.rotate(Math.sin(phase * 1.4) * 0.55);
+      this._drawSleepingCat(ctx, appearance, phase, false);
     } else {
       this._drawActiveCat(ctx, appearance, activity, phase);
     }
@@ -984,24 +987,37 @@ export class Renderer {
 
   _drawActiveCat(ctx, appearance, activity, phase) {
     const walking = activity === 'walk';
-    const playing = activity === 'play';
+    const playing = activity === 'play' || activity === 'pounce';
     const eating = activity === 'eat' || activity === 'drink';
-    const sitting = activity === 'warm' || activity === 'watch' || activity === 'groom';
-    const bounce = walking ? Math.abs(Math.sin(phase)) * 1.4 : playing ? Math.abs(Math.sin(phase * .7)) * 2.8 : 0;
-    const bodyY = sitting ? 1 : -1 - bounce;
-    const headDip = eating ? 4 + Math.sin(phase * .45) * 1.2 : 0;
+    const stretching = activity === 'stretch';
+    const yawning = activity === 'yawn';
+    const licking = activity === 'lick' || activity === 'groom';
+    const sitting = activity === 'warm' || activity === 'watch' || activity === 'ear_twitch' || activity === 'tail_flick';
+    const bounce = walking
+      ? Math.abs(Math.sin(phase)) * 2.2
+      : playing
+        ? Math.abs(Math.sin(phase * .9)) * 5
+        : stretching
+          ? Math.sin(phase * .5) * 1.2
+          : 0;
+    const stretchX = stretching ? 1.18 + Math.sin(phase * .6) * 0.08 : 1;
+    const bodyY = sitting ? 1 : licking ? 0 : -1 - bounce;
+    const headDip = eating ? 4 + Math.sin(phase * .45) * 1.2 : yawning ? -1 : licking ? 3 : 0;
 
-    // Tail — soft rounded stroke
+    ctx.save();
+    if (stretching) ctx.scale(stretchX, 0.92);
+
+    // Tail — soft rounded stroke with flick gesture
+    const flick = activity === 'tail_flick' ? Math.sin(phase * 4) * 7 : Math.sin(phase * .6) * 3;
     ctx.strokeStyle = appearance.coat;
     ctx.lineWidth = 5;
     ctx.lineCap = 'round';
     ctx.beginPath();
     ctx.moveTo(-8, bodyY);
     if (sitting) {
-      ctx.bezierCurveTo(-16, -6, -18, 2, -12, 6);
+      ctx.bezierCurveTo(-16, -6 + flick * .2, -18 + flick * .3, 2, -12 + flick * .15, 6);
     } else {
-      const wag = Math.sin(phase * .6) * 3;
-      ctx.bezierCurveTo(-16, bodyY - 6, -20 + wag * .2, bodyY + 2, -14 + wag, bodyY + 5);
+      ctx.bezierCurveTo(-16, bodyY - 6, -20 + flick * .2, bodyY + 2, -14 + flick, bodyY + 5);
     }
     ctx.stroke();
     ctx.strokeStyle = this._lighten(appearance.coat, .12);
@@ -1009,18 +1025,28 @@ export class Renderer {
     ctx.stroke();
 
     // Tiny paws
-    if (!sitting) {
-      const legSwing = walking ? Math.sin(phase) * 2.5 : activity === 'litter' ? Math.sin(phase * 1.7) * 2.5 : 0;
+    if (!sitting || licking) {
+      const legSwing = walking ? Math.sin(phase) * 3.2 : activity === 'litter' ? Math.sin(phase * 1.7) * 2.5 : playing ? Math.sin(phase) * 4 : 0;
+      const pawY = licking ? 6 + Math.abs(Math.sin(phase * 2)) * 2 : 7;
       ctx.fillStyle = appearance.dark;
       ctx.beginPath();
-      ctx.ellipse(-5 + legSwing * .4, 7, 2.8, 2, 0, 0, Math.PI * 2);
-      ctx.ellipse(5 - legSwing * .4, 7, 2.8, 2, 0, 0, Math.PI * 2);
+      ctx.ellipse(-5 + legSwing * .4, pawY, 2.8, 2, 0, 0, Math.PI * 2);
+      ctx.ellipse(5 - legSwing * .4, pawY, 2.8, 2, 0, 0, Math.PI * 2);
       ctx.fill();
       ctx.fillStyle = appearance.light;
       ctx.beginPath();
-      ctx.ellipse(-5 + legSwing * .4, 7.2, 1.6, 1, 0, 0, Math.PI * 2);
-      ctx.ellipse(5 - legSwing * .4, 7.2, 1.6, 1, 0, 0, Math.PI * 2);
+      ctx.ellipse(-5 + legSwing * .4, pawY + .2, 1.6, 1, 0, 0, Math.PI * 2);
+      ctx.ellipse(5 - legSwing * .4, pawY + .2, 1.6, 1, 0, 0, Math.PI * 2);
       ctx.fill();
+
+      // Raised paw while licking
+      if (licking) {
+        const pawLift = 2 + Math.sin(phase * 3) * 2;
+        ctx.fillStyle = appearance.coat;
+        ctx.beginPath();
+        ctx.ellipse(6, bodyY - 2 - pawLift, 2.4, 2.8, .4, 0, Math.PI * 2);
+        ctx.fill();
+      }
     }
 
     // Soft body blob with gradient (kawaii chibi)
@@ -1029,7 +1055,9 @@ export class Renderer {
     bodyGrad.addColorStop(1, appearance.coat);
     ctx.fillStyle = bodyGrad;
     ctx.beginPath();
-    ctx.ellipse(sitting ? -1 : 0, bodyY, sitting ? 9 : 11, sitting ? 9 : 7.5, -.05, 0, Math.PI * 2);
+    const bodyW = stretching ? 13 : sitting ? 9 : 11;
+    const bodyH = stretching ? 6.2 : sitting ? 9 : 7.5;
+    ctx.ellipse(sitting ? -1 : 0, bodyY, bodyW, bodyH, -.05, 0, Math.PI * 2);
     ctx.fill();
     ctx.strokeStyle = appearance.dark;
     ctx.lineWidth = 1.4;
@@ -1039,8 +1067,10 @@ export class Renderer {
     this._drawCoatPattern(ctx, appearance, bodyY, sitting);
 
     // Big kawaii head
-    const headX = sitting ? 1 : 7;
-    const headY = (sitting ? -10 : -8 - bounce) + headDip;
+    const headX = sitting ? 1 : stretching ? 10 : 7;
+    const headY = (sitting ? -10 : stretching ? -5 - bounce : -8 - bounce) + headDip;
+    const earTwitch = activity === 'ear_twitch' ? Math.sin(phase * 5) * 2.5 : 0;
+
     const headGrad = ctx.createRadialGradient(headX - 2, headY - 3, 1, headX, headY, 10);
     headGrad.addColorStop(0, this._lighten(appearance.coat, .2));
     headGrad.addColorStop(1, appearance.coat);
@@ -1053,10 +1083,11 @@ export class Renderer {
     ctx.stroke();
 
     // Soft rounded ears
-    this._drawKawaiiEar(ctx, appearance, headX - 6.5, headY - 6, -1);
-    this._drawKawaiiEar(ctx, appearance, headX + 6.5, headY - 6, 1);
+    this._drawKawaiiEar(ctx, appearance, headX - 6.5, headY - 6 + earTwitch, -1);
+    this._drawKawaiiEar(ctx, appearance, headX + 6.5, headY - 6 - earTwitch * .6, 1);
 
-    this._drawCatFace(ctx, appearance, headX, headY, eating, activity === 'groom', phase);
+    this._drawCatFace(ctx, appearance, headX, headY, eating || licking, licking, phase, yawning);
+    ctx.restore();
   }
 
   _drawKawaiiEar(ctx, appearance, x, y, side) {
@@ -1077,7 +1108,7 @@ export class Renderer {
     ctx.globalAlpha = 1;
   }
 
-  _drawSleepingCat(ctx, appearance, phase) {
+  _drawSleepingCat(ctx, appearance, phase, loaf = false) {
     const breathe = Math.sin(phase) * .4;
 
     const bodyGrad = ctx.createRadialGradient(-2, -2, 1, 0, 0, 14);
@@ -1087,17 +1118,23 @@ export class Renderer {
     ctx.strokeStyle = appearance.dark;
     ctx.lineWidth = 1.4;
     ctx.beginPath();
-    ctx.ellipse(0, 1, 13 + breathe, 8.5 + breathe, -.12, 0, Math.PI * 2);
+    if (loaf) {
+      ctx.ellipse(0, 2, 12 + breathe * .5, 9.5 + breathe, 0, 0, Math.PI * 2);
+    } else {
+      ctx.ellipse(0, 1, 13 + breathe, 8.5 + breathe, -.12, 0, Math.PI * 2);
+    }
     ctx.fill();
     ctx.stroke();
 
     // Curled soft tail
-    ctx.strokeStyle = appearance.coat;
-    ctx.lineWidth = 5;
-    ctx.lineCap = 'round';
-    ctx.beginPath();
-    ctx.arc(-2, 1, 11, -.15, Math.PI * 1.15);
-    ctx.stroke();
+    if (!loaf) {
+      ctx.strokeStyle = appearance.coat;
+      ctx.lineWidth = 5;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.arc(-2, 1, 11, -.15, Math.PI * 1.15);
+      ctx.stroke();
+    }
 
     // Head
     const headGrad = ctx.createRadialGradient(7, -4, 1, 8, -2, 8);
@@ -1105,37 +1142,39 @@ export class Renderer {
     headGrad.addColorStop(1, appearance.coat);
     ctx.fillStyle = headGrad;
     ctx.beginPath();
-    ctx.arc(8, -2, 8, 0, Math.PI * 2);
+    ctx.arc(loaf ? 2 : 8, loaf ? -4 : -2, loaf ? 8.5 : 8, 0, Math.PI * 2);
     ctx.fill();
     ctx.strokeStyle = appearance.dark;
     ctx.lineWidth = 1.3;
     ctx.stroke();
 
-    this._drawKawaiiEar(ctx, appearance, 4, -7, -1);
-    this._drawKawaiiEar(ctx, appearance, 13, -6, 1);
+    const hx = loaf ? 2 : 8;
+    const hy = loaf ? -4 : -2;
+    this._drawKawaiiEar(ctx, appearance, hx - 4, hy - 5, -1);
+    this._drawKawaiiEar(ctx, appearance, hx + 5, hy - 4, 1);
 
     // Closed sleepy eyes
     ctx.strokeStyle = appearance.dark;
     ctx.lineWidth = 1.2;
     ctx.lineCap = 'round';
     ctx.beginPath();
-    ctx.arc(5.5, -2, 1.6, .25, Math.PI - .25);
-    ctx.arc(10.5, -2, 1.6, .25, Math.PI - .25);
+    ctx.arc(hx - 2.5, hy, 1.6, .25, Math.PI - .25);
+    ctx.arc(hx + 2.5, hy, 1.6, .25, Math.PI - .25);
     ctx.stroke();
 
     // Soft blush
     ctx.fillStyle = appearance.blush || '#f5a8b0';
     ctx.globalAlpha = .45;
     ctx.beginPath();
-    ctx.ellipse(4, 0, 2.2, 1.3, 0, 0, Math.PI * 2);
-    ctx.ellipse(12, 0, 2.2, 1.3, 0, 0, Math.PI * 2);
+    ctx.ellipse(hx - 4, hy + 2, 2.2, 1.3, 0, 0, Math.PI * 2);
+    ctx.ellipse(hx + 4, hy + 2, 2.2, 1.3, 0, 0, Math.PI * 2);
     ctx.fill();
     ctx.globalAlpha = 1;
 
     // Tiny nose
     ctx.fillStyle = '#e89098';
     ctx.beginPath();
-    ctx.ellipse(8, 0.5, 1.2, .8, 0, 0, Math.PI * 2);
+    ctx.ellipse(hx, hy + 2.5, 1.2, .8, 0, 0, Math.PI * 2);
     ctx.fill();
   }
 
@@ -1171,7 +1210,7 @@ export class Renderer {
     ctx.restore();
   }
 
-  _drawCatFace(ctx, appearance, x, y, lookingDown, grooming, phase) {
+  _drawCatFace(ctx, appearance, x, y, lookingDown, grooming, phase, yawning = false) {
     // Soft blush cheeks
     ctx.fillStyle = appearance.blush || '#f5a8b0';
     ctx.globalAlpha = .5;
@@ -1182,6 +1221,26 @@ export class Renderer {
     ctx.globalAlpha = 1;
 
     const eyeY = y - .5;
+    if (yawning) {
+      // Closed happy eyes + open mouth
+      ctx.strokeStyle = appearance.dark;
+      ctx.lineWidth = 1.3;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.arc(x - 3, eyeY, 1.8, .2, Math.PI - .2);
+      ctx.arc(x + 3, eyeY, 1.8, .2, Math.PI - .2);
+      ctx.stroke();
+      ctx.fillStyle = '#5a4050';
+      ctx.beginPath();
+      ctx.ellipse(x, y + 4.5, 2.4, 2.8 + Math.abs(Math.sin(phase)) * 1.2, 0, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.fillStyle = '#e89098';
+      ctx.beginPath();
+      ctx.ellipse(x, y + 5.2, 1.2, 1.4, 0, 0, Math.PI * 2);
+      ctx.fill();
+      return;
+    }
+
     if (grooming && Math.sin(phase) > 0) {
       ctx.strokeStyle = appearance.dark;
       ctx.lineWidth = 1.2;
@@ -1243,6 +1302,8 @@ export class Renderer {
     const activityIcons = {
       eat: '🍽', drink: '💧', sleep: 'z', play: '✦', litter: '◌',
       warm: '☀', groom: '♥', watch: '…', explore: '',
+      stretch: '∿', yawn: '◡', lick: '👅', loaf: '▮',
+      ear_twitch: '♪', tail_flick: '~', pounce: '✧', roll: '↻',
     };
     const icon = activityIcons[cat.activity];
     if (!icon) return;

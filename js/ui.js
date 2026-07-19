@@ -9,6 +9,7 @@ import {
 } from './cats.js';
 import { findExpandablePositions } from './hex.js';
 import { loadAllSaves, saveGame, deleteSave, autoSave, getSaveMeta } from './save.js';
+import { audio } from './audio.js';
 
 export class UI {
   constructor(game) {
@@ -18,6 +19,7 @@ export class UI {
     this._toastTimer = null;
     this._bindElements();
     this._bindEvents();
+    this.syncMuteButton();
     this.renderMenu();
   }
 
@@ -43,11 +45,13 @@ export class UI {
       catsLimitDetail: document.getElementById('cats-limit-detail'),
       pausePanel: document.getElementById('pause-panel'),
       toast: document.getElementById('toast'),
+      muteBtn: document.getElementById('btn-mute'),
     };
   }
 
   _bindEvents() {
     document.getElementById('cancel-new-game').addEventListener('click', () => {
+      audio.uiClick();
       this.el.newGameModal.classList.add('hidden');
     });
 
@@ -57,33 +61,46 @@ export class UI {
         const state = createNewGame(this.pendingSlot, name, this.selectedDifficulty);
         saveGame(state);
         this.el.newGameModal.classList.add('hidden');
+        audio.happyChime();
         this.game.start(state);
       }
     });
 
     this.el.statHappiness.addEventListener('click', () => {
+      audio.uiClick();
       this.renderHappinessPanel();
       this.togglePanel('happiness-panel');
     });
 
     this.el.statCats.addEventListener('click', () => {
+      audio.uiClick();
       this.renderCatsLimitPanel();
       this.togglePanel('cats-panel');
     });
 
     document.getElementById('btn-pause').addEventListener('click', () => {
+      audio.uiClick();
       this.togglePanel('pause-panel');
+    });
+
+    this.el.muteBtn?.addEventListener('click', async () => {
+      await audio.unlock();
+      audio.toggle();
+      this.syncMuteButton();
+      if (audio.enabled) audio.uiClick();
     });
 
     document.getElementById('btn-save').addEventListener('click', () => {
       if (this.game.state) {
         saveGame(this.game.state);
+        audio.uiClick();
         this.showToast('Partida guardada ✓');
       }
     });
 
     document.getElementById('btn-menu').addEventListener('click', () => {
       if (this.game.state) autoSave(this.game.state);
+      audio.uiClick();
       this.game.stop();
       this.closeAllPanels();
       this.showScreen('menu');
@@ -92,9 +109,17 @@ export class UI {
 
     document.querySelectorAll('[data-close]').forEach((btn) => {
       btn.addEventListener('click', () => {
+        audio.uiClick();
         this.closePanel(btn.dataset.close);
       });
     });
+  }
+
+  syncMuteButton() {
+    if (!this.el.muteBtn) return;
+    this.el.muteBtn.textContent = audio.enabled ? '🔊' : '🔇';
+    this.el.muteBtn.title = audio.enabled ? 'Silenciar' : 'Activar sonido';
+    this.el.muteBtn.setAttribute('aria-pressed', audio.enabled ? 'false' : 'true');
   }
 
   showScreen(name) {
@@ -344,12 +369,15 @@ export class UI {
         if (b?.upgradeable) {
           const result = tryUpgrade(state, hexKey);
           if (result.ok) {
+            audio.upgrade();
             this.showToast(`${b.name} mejorado a nivel ${result.newLevel}!`);
             saveGame(state);
           } else {
+            audio.uiClick();
             this.showToast(result.reason);
           }
         } else {
+          audio.uiClick();
           this.showToast(b?.description || 'Edificio construido');
         }
       }
@@ -357,12 +385,14 @@ export class UI {
     }
 
     if (!canPlaceBuilding(state, hexKey, state.selectedBuild)) {
+      audio.uiClick();
       this.showToast('No se puede construir aquí');
       return;
     }
 
     const result = placeBuilding(state, hexKey, state.selectedBuild);
     if (result.ok) {
+      audio.place();
       this.showToast('¡Construido!');
       if (state.selectedBuild !== 'hex_tile') {
         state.selectedBuild = null;
@@ -372,6 +402,7 @@ export class UI {
       this.game.renderer.centerOnHexes(deserializeHexes(state.hexes));
       saveGame(state);
     } else {
+      audio.uiClick();
       this.showToast(result.reason);
     }
   }

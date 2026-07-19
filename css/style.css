@@ -719,7 +719,9 @@ button:focus-visible, input:focus-visible {
 }
 .stat-value { margin-top: 3px; font-size: .87rem; }
 .resource-stat .stat-icon { background: rgba(246,199,111,.16); }
-.hud-menu-btn { margin-left: auto; width: 48px; }
+.hud-menu-btn { width: 48px; }
+#btn-mute { margin-left: auto; }
+#btn-pause { margin-left: .35rem; }
 
 .map-vignette {
   position: absolute;
@@ -838,6 +840,7 @@ button:focus-visible, input:focus-visible {
   .stat-copy small { display: none; }
   .stat-value { margin: 0; font-size: .8rem; }
   .hud-menu-btn { width: 44px; min-height: 44px; }
+  #btn-mute, #btn-pause { width: 44px; }
 }
 
 @media (min-width: 900px) {
