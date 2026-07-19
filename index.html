@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="#201a2f">
+  <title>Catio Builder — Construye el paraíso felino</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <div id="app">
+    <!-- Pantalla de menú -->
+    <div id="menu-screen" class="screen active">
+      <div class="menu-bg"></div>
+      <header class="menu-header">
+        <div class="logo-crest" aria-hidden="true"><span>🐾</span></div>
+        <div class="logo"><span>Catio</span> Builder</div>
+        <p class="tagline">Un pequeño reino para grandes ronroneos</p>
+        <div class="ornament" aria-hidden="true"><span>✦</span></div>
+      </header>
+      <div class="save-slots" id="save-slots"></div>
+      <footer class="menu-footer">
+        <p class="hint">Toca una partida para continuar o crear una nueva</p>
+      </footer>
+    </div>
+
+    <!-- Modal nueva partida -->
+    <div id="new-game-modal" class="modal hidden">
+      <div class="modal-content">
+        <h2>Nueva partida</h2>
+        <label class="field">
+          <span>Nombre del catio</span>
+          <input type="text" id="catio-name" maxlength="24" placeholder="Mi Catio Feliz">
+        </label>
+        <div class="field">
+          <span>Dificultad</span>
+          <div class="difficulty-options" id="difficulty-options"></div>
+        </div>
+        <div class="modal-actions">
+          <button class="btn btn-secondary" id="cancel-new-game">Cancelar</button>
+          <button class="btn btn-primary" id="start-new-game">Comenzar</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Pantalla de juego -->
+    <div id="game-screen" class="screen">
+      <header class="hud-top">
+        <div class="hud-stat resource-stat" id="stat-croquetas">
+          <span class="stat-icon">🍪</span>
+          <span class="stat-copy"><small>Croquetas</small><span class="stat-value" id="croquetas-value">0</span></span>
+        </div>
+        <button class="hud-stat hud-btn" id="stat-happiness" title="Felicidad promedio">
+          <span class="stat-icon">😸</span>
+          <span class="stat-copy"><small>Felicidad</small><span class="stat-value" id="happiness-value">100%</span></span>
+        </button>
+        <button class="hud-stat hud-btn" id="stat-cats" title="Gatos en el catio">
+          <span class="stat-icon">🐾</span>
+          <span class="stat-copy"><small>Habitantes</small><span class="stat-value" id="cats-value">0/4</span></span>
+        </button>
+        <button class="btn-icon hud-menu-btn" id="btn-pause" title="Menú">☰</button>
+      </header>
+
+      <div class="game-area">
+        <canvas id="game-canvas"></canvas>
+        <div class="map-vignette" aria-hidden="true"></div>
+        <div class="camera-hint" aria-hidden="true">Arrastra para explorar · Pellizca para acercar</div>
+        <div id="tile-tooltip" class="tooltip hidden"></div>
+      </div>
+
+      <footer class="hud-bottom">
+        <div class="build-info" id="build-info">
+          <span class="build-info-icon">🔨</span>
+          <div>
+            <p class="build-desc" id="build-desc">Selecciona un elemento para construir</p>
+            <p class="build-cost" id="build-cost"></p>
+          </div>
+        </div>
+        <div class="build-categories" id="build-categories"></div>
+      </footer>
+    </div>
+
+    <!-- Panel detalle felicidad -->
+    <div id="happiness-panel" class="side-panel hidden">
+      <div class="panel-header">
+        <h3>Felicidad de los gatos</h3>
+        <button class="btn-close" data-close="happiness-panel">✕</button>
+      </div>
+      <div class="panel-body" id="happiness-detail"></div>
+    </div>
+
+    <!-- Panel detalle límite gatos -->
+    <div id="cats-panel" class="side-panel hidden">
+      <div class="panel-header">
+        <h3>Límite de gatos</h3>
+        <button class="btn-close" data-close="cats-panel">✕</button>
+      </div>
+      <div class="panel-body" id="cats-limit-detail"></div>
+    </div>
+
+    <!-- Panel pausa -->
+    <div id="pause-panel" class="side-panel hidden">
+      <div class="panel-header">
+        <h3>Menú</h3>
+        <button class="btn-close" data-close="pause-panel">✕</button>
+      </div>
+      <div class="panel-body panel-actions">
+        <button class="btn btn-primary" id="btn-save">Guardar partida</button>
+        <button class="btn btn-secondary" id="btn-menu">Volver al menú</button>
+      </div>
+    </div>
+
+    <!-- Toast -->
+    <div id="toast" class="toast hidden"></div>
+  </div>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
